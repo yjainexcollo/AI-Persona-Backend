@@ -1,0 +1,1568 @@
+openapi: 3.0.3
+info:
+  title: AI-Persona Backend API
+  version: 1.0.0
+  description: |
+    # AI-Persona SaaS Backend API
+
+    This API provides robust, secure, and multi-tenant authentication, workspace invite, and password reset flows for the AI-Persona SaaS platform.
+
+    ## **Workflow Summary**
+    - **New User Registration:**
+      1. User registers via `/api/auth/register`.
+      2. Receives a verification email. Must verify before logging in.
+      3. After verification, can log in and access their workspace.
+    - **Invite Flow:**
+      1. Workspace admin/member sends an invite via `/api/invites/send` (requires JWT).
+      2. Invitee receives an email with a secure invite link.
+      3. Invitee accepts via `/api/invites/accept` (public endpoint). If new, they sign up; if existing, they join the workspace.
+      4. Only valid, unused, and unexpired invites can be accepted.
+    - **Password Reset:**
+      1. Authenticated user requests a reset via `/api/auth/request-password-reset` (requires JWT).
+      2. Receives a reset email with a secure link.
+      3. Resets password via `/api/auth/reset-password` (requires JWT and valid token).
+
+    **Base URLs:** `/api/auth`, `/api/invites`, `/api/oauth`
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /api/auth/register:
+    post:
+      summary: Register a new user
+      tags: [Auth]
+      description: |
+        Registers a new user. After registration, a verification email is sent to the provided email address.
+        **Note:** The user must verify their email before they can log in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: newuser@company.com
+                password:
+                  type: string
+                  format: password
+                  example: StrongPassword!2025
+                name:
+                  type: string
+                  example: Alice Smith
+            example:
+              email: newuser@company.com
+              password: StrongPassword!2025
+              name: Alice Smith
+      responses:
+        "201":
+          description: Registration successful. Verification email sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+              example:
+                status: success
+                message: Registration successful. Verification email sent.
+                data:
+                  user:
+                    id: cluser_abc123
+                    email: newuser@company.com
+                    name: Alice Smith
+                    memberships:
+                      - workspaceId: clworkspace_123xyz
+                        role: MEMBER
+                  workspace:
+                    id: clworkspace_123xyz
+                    domain: company.com
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/login:
+    post:
+      summary: Login with email and password
+      tags: [Auth]
+      description: |
+        Logs in a user with email and password. Only users with verified emails can log in.
+        If the email is not verified, an error is returned and the user should check their inbox or request a new verification email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: alice@company.com
+                password:
+                  type: string
+                  format: password
+                  example: StrongPassword!2025
+            example:
+              email: alice@company.com
+              password: StrongPassword!2025
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+              example:
+                status: success
+                message: Login successful
+                data:
+                  user:
+                    id: cluser_abc123
+                    email: alice@company.com
+                    name: Alice Smith
+                    memberships:
+                      - workspaceId: clworkspace_123xyz
+                        role: MEMBER
+                  workspaceId: clworkspace_123xyz
+                  accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...abc123
+                  refreshToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...xyz789
+        "401":
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Email not verified or user account is inactive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/refresh:
+    post:
+      summary: Refresh access and refresh tokens
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...xyz789
+            example:
+              refreshToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...xyz789
+      responses:
+        "200":
+          description: Tokens refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshSuccessResponse"
+              example:
+                status: success
+                message: Tokens refreshed
+                data:
+                  accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...abc123
+                  refreshToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...xyz789
+        "401":
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # --- OAuth Routes ---
+  /api/oauth/google:
+    get:
+      summary: Initiate Google OAuth login
+      tags: [OAuth]
+      description: |
+        Redirects the user to Google for authentication. This is a public endpoint.
+
+        On success, Google will redirect the user to `/api/oauth/google/callback`.
+      responses:
+        "302":
+          description: Redirects to Google OAuth login page
+
+  /api/oauth/google/callback:
+    get:
+      summary: Google OAuth callback
+      tags: [OAuth]
+      description: |
+        Handles the callback from Google after user authentication.
+
+        On success, returns a standardized API response with user info and tokens.
+        On failure, redirects to `/login` or returns an error.
+      responses:
+        "200":
+          description: OAuth login/registration successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+        "401":
+          description: Invalid or expired OAuth session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/verify-email:
+    get:
+      summary: Verify user email with a token
+      tags: [Auth]
+      description: |
+        Verifies a user's email address using a verification token sent via email.
+        The token is provided as a query parameter.
+      parameters:
+        - in: query
+          name: token
+          schema:
+            type: string
+            example: 1234567890abcdef
+          required: true
+          description: The email verification token sent to the user's email.
+      responses:
+        "200":
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Email verified
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: "#/components/schemas/AuthSuccessResponse/properties/data/properties/user"
+              example:
+                status: success
+                message: Email verified
+                data:
+                  user:
+                    id: cluser_abc123
+                    email: alice@company.com
+                    name: Alice Smith
+                    memberships:
+                      - workspaceId: clworkspace_123xyz
+                        role: MEMBER
+        "400":
+          description: Invalid or expired verification token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/resend-verification:
+    post:
+      summary: Resend email verification link
+      tags: [Auth]
+      description: |
+        Resends the email verification link to the user. Accepts the user's email in the POST body.
+        No authentication is required. Rate limited to 5 requests per hour per IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: alice@company.com
+            example:
+              email: alice@company.com
+      responses:
+        "200":
+          description: Verification email resent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Verification email resent
+              example:
+                status: success
+                message: Verification email resent
+        "400":
+          description: Email already verified or invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Too many requests (rate limit exceeded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/request-password-reset:
+    post:
+      summary: Request password reset
+      tags: [Auth]
+      description: |
+        Authenticated users can request a password reset link to be sent to their email address.
+        Requires a valid JWT access token in the Authorization header.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: alice@company.com
+            example:
+              email: alice@company.com
+      responses:
+        "200":
+          description: If an account with that email exists, a password reset link has been sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: If an account with that email exists, a password reset link has been sent.
+              example:
+                status: success
+                message: If an account with that email exists, a password reset link has been sent.
+        "400":
+          description: Email is required or invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/reset-password:
+    post:
+      summary: Reset password
+      tags: [Auth]
+      description: |
+        Authenticated users can reset their password using a valid reset token and a new password.
+        Requires a valid JWT access token in the Authorization header.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - newPassword
+              properties:
+                token:
+                  type: string
+                  example: 1234567890abcdef
+                newPassword:
+                  type: string
+                  format: password
+                  example: NewStrongPassword!2025
+            example:
+              token: 1234567890abcdef
+              newPassword: NewStrongPassword!2025
+      responses:
+        "200":
+          description: Password has been reset successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Password has been reset successfully.
+              example:
+                status: success
+                message: Password has been reset successfully.
+        "400":
+          description: Token and new password are required, or invalid/expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/invites/send:
+    post:
+      summary: Send workspace invite
+      tags: [Invite]
+      description: |
+        **RBAC:** Only users with the `invite_user` permission (typically `ADMIN` role) can access this endpoint.
+
+        Authenticated users (admins/members) can invite others to join a workspace by email.
+        Requires a valid JWT access token in the Authorization header.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - workspaceId
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: invitee@company.com
+                workspaceId:
+                  type: string
+                  example: clworkspace_123xyz
+                role:
+                  type: string
+                  example: MEMBER
+            example:
+              email: invitee@company.com
+              workspaceId: clworkspace_123xyz
+              role: MEMBER
+      responses:
+        "200":
+          description: Invite sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Invite sent
+                  data:
+                    type: object
+                    properties:
+                      invite:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            example: clinvite_abc123
+                          email:
+                            type: string
+                            example: invitee@company.com
+                          token:
+                            type: string
+                            example: d8f3e2c1b4a5f6d7e8c9b0a1d2e3f4c5
+                          expiresAt:
+                            type: string
+                            format: date-time
+                            example: "2025-07-22T18:00:00.000Z"
+                          workspaceId:
+                            type: string
+                            example: clworkspace_123xyz
+                          createdById:
+                            type: string
+                            example: cluser_456def
+              example:
+                status: success
+                message: Invite sent
+                data:
+                  invite:
+                    id: clinvite_abc123
+                    email: invitee@company.com
+                    token: d8f3e2c1b4a5f6d7e8c9b0a1d2e3f4c5
+                    expiresAt: "2025-07-22T18:00:00.000Z"
+                    workspaceId: clworkspace_123xyz
+                    createdById: cluser_456def
+        "400":
+          description: Email and workspaceId are required, or user already a member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/invites/accept:
+    post:
+      summary: Accept workspace invite
+      tags: [Invite]
+      description: |
+        **RBAC:** This endpoint is public. Any user (new or existing) can accept an invite using a valid invite token.
+
+        Accept a workspace invite using a valid invite token. Can be used by new or existing users.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - userId
+              properties:
+                token:
+                  type: string
+                  example: d8f3e2c1b4a5f6d7e8c9b0a1d2e3f4c5
+                userId:
+                  type: string
+                  example: cluser_abc123
+            example:
+              token: d8f3e2c1b4a5f6d7e8c9b0a1d2e3f4c5
+              userId: cluser_abc123
+      responses:
+        "200":
+          description: Invite accepted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Invite accepted
+                  data:
+                    type: object
+                    properties:
+                      invite:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            example: clinvite_abc123
+                          email:
+                            type: string
+                            example: invitee@company.com
+                          workspaceId:
+                            type: string
+                            example: clworkspace_123xyz
+                          used:
+                            type: boolean
+                            example: true
+              example:
+                status: success
+                message: Invite accepted
+                data:
+                  invite:
+                    id: clinvite_abc123
+                    email: invitee@company.com
+                    workspaceId: clworkspace_123xyz
+                    used: true
+        "400":
+          description: Token and userId are required, or invalid/expired invite, or user already a member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Invite or user not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/workspaces/{id}:
+    delete:
+      summary: Delete a workspace
+      tags: [Workspace]
+      description: |
+        **RBAC:** Only users with the `delete_workspace` permission (ADMIN role) can access this endpoint.
+        Deletes the specified workspace.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The workspace ID
+      responses:
+        "200":
+          description: Workspace deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Workspace deleted
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Workspace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/users/me:
+    get:
+      summary: Get current user profile
+      tags: [User]
+      description: |
+        **RBAC:** Any authenticated user can access this endpoint.
+        Returns the current user's profile, including memberships.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            example: cluser_abc123
+                          email:
+                            type: string
+                            example: alice@company.com
+                          name:
+                            type: string
+                            example: Alice Smith
+                          emailVerified:
+                            type: boolean
+                            example: true
+                          isActive:
+                            type: boolean
+                            example: true
+                          memberships:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                workspaceId:
+                                  type: string
+                                  example: clworkspace_123xyz
+                                role:
+                                  type: string
+                                  example: MEMBER
+                          createdAt:
+                            type: string
+                            format: date-time
+                            example: "2025-07-21T18:00:00.000Z"
+                          updatedAt:
+                            type: string
+                            format: date-time
+                            example: "2025-07-21T18:00:00.000Z"
+              example:
+                status: success
+                data:
+                  user:
+                    id: cluser_abc123
+                    email: alice@company.com
+                    name: Alice Smith
+                    emailVerified: true
+                    isActive: true
+                    memberships:
+                      - workspaceId: clworkspace_123xyz
+                        role: MEMBER
+                    createdAt: "2025-07-21T18:00:00.000Z"
+                    updatedAt: "2025-07-21T18:00:00.000Z"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/users/me/password:
+    put:
+      summary: Change password
+      tags: [User]
+      description: |
+        **RBAC:** Any authenticated user can change their password.
+        Requires the current password and a new password.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                  format: password
+                  example: OldPassword!2024
+                newPassword:
+                  type: string
+                  format: password
+                  example: NewStrongPassword!2025
+            example:
+              currentPassword: OldPassword!2024
+              newPassword: NewStrongPassword!2025
+      responses:
+        "200":
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Password changed successfully
+              example:
+                status: success
+                message: Password changed successfully
+        "400":
+          description: Current and new password are required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication required or current password incorrect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/users/me/deactivate:
+    post:
+      summary: Deactivate (soft delete) account
+      tags: [User]
+      description: |
+        **RBAC:** Any authenticated user can deactivate their own account.
+        This will set the user's account as inactive (soft delete).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Account deactivated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Account deactivated
+              example:
+                status: success
+                message: Account deactivated
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/users:
+    get:
+      summary: List all users
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Returns a paginated list of all users. Supports optional search, skip, and take query parameters.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: skip
+          schema:
+            type: integer
+            example: 0
+          description: Number of users to skip (for pagination)
+        - in: query
+          name: take
+          schema:
+            type: integer
+            example: 20
+          description: Number of users to return (for pagination)
+        - in: query
+          name: search
+          schema:
+            type: string
+            example: alice
+          description: Search by email or name
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  users:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: cluser_abc123
+                        email:
+                          type: string
+                          example: alice@company.com
+                        name:
+                          type: string
+                          example: Alice Smith
+                        isActive:
+                          type: boolean
+                          example: true
+                        memberships:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              workspaceId:
+                                type: string
+                                example: clworkspace_123xyz
+                              role:
+                                type: string
+                                example: MEMBER
+                  total:
+                    type: integer
+                    example: 1
+              example:
+                status: success
+                users:
+                  - id: cluser_abc123
+                    email: alice@company.com
+                    name: Alice Smith
+                    isActive: true
+                    memberships:
+                      - workspaceId: clworkspace_123xyz
+                        role: MEMBER
+                total: 1
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/users/{id}:
+    get:
+      summary: Get user details
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Returns details for a specific user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The user ID
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: cluser_abc123
+                      email:
+                        type: string
+                        example: alice@company.com
+                      name:
+                        type: string
+                        example: Alice Smith
+                      isActive:
+                        type: boolean
+                        example: true
+                      memberships:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            workspaceId:
+                              type: string
+                              example: clworkspace_123xyz
+                            role:
+                              type: string
+                              example: MEMBER
+              example:
+                status: success
+                user:
+                  id: cluser_abc123
+                  email: alice@company.com
+                  name: Alice Smith
+                  isActive: true
+                  memberships:
+                    - workspaceId: clworkspace_123xyz
+                      role: MEMBER
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/users/{id}/activate:
+    post:
+      summary: Activate user
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Activates the specified user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The user ID
+      responses:
+        "200":
+          description: User activated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: User activated
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: cluser_abc123
+                      isActive:
+                        type: boolean
+                        example: true
+              example:
+                status: success
+                message: User activated
+                user:
+                  id: cluser_abc123
+                  isActive: true
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/users/{id}/deactivate:
+    post:
+      summary: Deactivate user
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Deactivates the specified user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The user ID
+      responses:
+        "200":
+          description: User deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: User deactivated
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: cluser_abc123
+                      isActive:
+                        type: boolean
+                        example: false
+              example:
+                status: success
+                message: User deactivated
+                user:
+                  id: cluser_abc123
+                  isActive: false
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/workspaces:
+    get:
+      summary: List all workspaces
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Returns a paginated list of all workspaces. Supports optional search, skip, and take query parameters.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: skip
+          schema:
+            type: integer
+            example: 0
+          description: Number of workspaces to skip (for pagination)
+        - in: query
+          name: take
+          schema:
+            type: integer
+            example: 20
+          description: Number of workspaces to return (for pagination)
+        - in: query
+          name: search
+          schema:
+            type: string
+            example: "acme"
+          description: Search by workspace name or domain
+      responses:
+        "200":
+          description: List of workspaces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  workspaces:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: clworkspace_123xyz
+                        name:
+                          type: string
+                          example: Acme Inc
+                        domain:
+                          type: string
+                          example: acme.com
+                        isActive:
+                          type: boolean
+                          example: true
+                        memberships:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              userId:
+                                type: string
+                                example: cluser_abc123
+                              role:
+                                type: string
+                                example: ADMIN
+                  total:
+                    type: integer
+                    example: 1
+              example:
+                status: success
+                workspaces:
+                  - id: clworkspace_123xyz
+                    name: Acme Inc
+                    domain: acme.com
+                    isActive: true
+                    memberships:
+                      - userId: cluser_abc123
+                        role: ADMIN
+                total: 1
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/workspaces/{id}:
+    get:
+      summary: Get workspace details
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Returns details for a specific workspace.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The workspace ID
+      responses:
+        "200":
+          description: Workspace details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  workspace:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: clworkspace_123xyz
+                      name:
+                        type: string
+                        example: Acme Inc
+                      domain:
+                        type: string
+                        example: acme.com
+                      isActive:
+                        type: boolean
+                        example: true
+                      memberships:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            userId:
+                              type: string
+                              example: cluser_abc123
+                            role:
+                              type: string
+                              example: ADMIN
+              example:
+                status: success
+                workspace:
+                  id: clworkspace_123xyz
+                  name: Acme Inc
+                  domain: acme.com
+                  isActive: true
+                  memberships:
+                    - userId: cluser_abc123
+                      role: ADMIN
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Workspace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/workspaces/{id}/activate:
+    post:
+      summary: Activate workspace
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Activates the specified workspace.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The workspace ID
+      responses:
+        "200":
+          description: Workspace activated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Workspace activated
+                  workspace:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: clworkspace_123xyz
+                      isActive:
+                        type: boolean
+                        example: true
+              example:
+                status: success
+                message: Workspace activated
+                workspace:
+                  id: clworkspace_123xyz
+                  isActive: true
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Workspace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/workspaces/{id}/deactivate:
+    post:
+      summary: Deactivate workspace
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Deactivates the specified workspace.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The workspace ID
+      responses:
+        "200":
+          description: Workspace deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  message:
+                    type: string
+                    example: Workspace deactivated
+                  workspace:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: clworkspace_123xyz
+                      isActive:
+                        type: boolean
+                        example: false
+              example:
+                status: success
+                message: Workspace deactivated
+                workspace:
+                  id: clworkspace_123xyz
+                  isActive: false
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Workspace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/stats:
+    get:
+      summary: Get system stats
+      tags: [Admin]
+      description: |
+        **RBAC:** Only users with the `ADMIN` role can access this endpoint.
+        Returns system usage statistics (user, workspace, invite counts).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: System stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: success
+                  stats:
+                    type: object
+                    properties:
+                      users:
+                        type: integer
+                        example: 10
+                      workspaces:
+                        type: integer
+                        example: 3
+                      invites:
+                        type: integer
+                        example: 5
+              example:
+                status: success
+                stats:
+                  users: 10
+                  workspaces: 3
+                  invites: 5
+        "401":
+          description: Authentication required or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    AuthSuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: Registration successful
+        data:
+          type: object
+          properties:
+            user:
+              type: object
+              properties:
+                id:
+                  type: string
+                  example: clxyz123abc
+                email:
+                  type: string
+                  example: user@example.com
+                name:
+                  type: string
+                  example: John Doe
+                memberships:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      workspaceId:
+                        type: string
+                        example: clxyzworkspace123
+                      role:
+                        type: string
+                        example: MEMBER
+            workspace:
+              type: object
+              properties:
+                id:
+                  type: string
+                  example: clxyzworkspace123
+                domain:
+                  type: string
+                  example: example.com
+            accessToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            refreshToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            isNewUser:
+              type: boolean
+              example: false
+            provider:
+              type: string
+              example: google
+    RefreshSuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: Tokens refreshed
+        data:
+          type: object
+          properties:
+            accessToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            refreshToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+              example: Invalid email or password
+            details:
+              type: string
+              example: Stack trace or additional error details (optional)
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
