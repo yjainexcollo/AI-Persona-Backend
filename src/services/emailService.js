@@ -265,7 +265,9 @@ async function sendInviteEmail(email, token, workspaceId) {
     }
 
     // Use config for frontend URL instead of hardcoded localhost
-    const frontendUrl = config.frontendUrl || "http://localhost:5173";
+    const frontendUrl =
+      config.frontendUrl ||
+      "https://ai-persona-frontend-ashy.vercel.app";
     const registerUrl = `${frontendUrl}/register?token=${token}`;
 
     const mailOptions = {

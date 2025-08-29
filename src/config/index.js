@@ -32,7 +32,9 @@ const config = {
   smtpUser: getEnvVar("SMTP_USER", false) || "user@example.com",
   smtpPass: getEnvVar("SMTP_PASS", false) || "password",
   smtpFrom: getEnvVar("SMTP_FROM", false) || "no-reply@example.com",
-  appBaseUrl: getEnvVar("APP_BASE_URL", false) || "http://localhost:5173",
+  appBaseUrl:
+    getEnvVar("APP_BASE_URL", false) ||
+    "https://ai-persona-frontend-ashy.vercel.app",
 };
 
 module.exports = config;

@@ -49,7 +49,9 @@ const buildRedirectUrl = (token, workspaceId, workspaceName) => {
     throw new Error("Valid token is required");
   }
 
-  const baseUrl = config.frontendUrl || "http://localhost:5173";
+  const baseUrl =
+    config.frontendUrl ||
+    "https://ai-persona-frontend-ashy.vercel.app";
   const params = new URLSearchParams();
 
   params.append("token", token.trim());
