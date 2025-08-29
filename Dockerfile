@@ -7,9 +7,18 @@ RUN apk add --no-cache libc6-compat
 # Set working directory
 WORKDIR /usr/src/app
 
-# Install only production dependencies
+# Copy package files
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY prisma ./prisma/
+
+# Install dependencies (including dev dependencies needed for Prisma)
+RUN npm ci
+
+# Generate Prisma client for the target platform
+RUN npx prisma generate
+
+# Remove dev dependencies to reduce image size
+RUN npm prune --omit=dev
 
 # Copy application source
 COPY . .

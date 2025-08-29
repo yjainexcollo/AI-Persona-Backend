@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "build": "npx prisma generate && npx prisma migrate deploy",
     "migrate": "npx prisma migrate dev",
     "generate": "npx prisma generate",
     "lint": "echo \"No linter configured yet\" && exit 0",
