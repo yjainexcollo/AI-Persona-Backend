@@ -1,0 +1,3230 @@
+openapi: 3.0.3
+security:
+  - BearerAuth: []
+info:
+  title: AI-Persona Backend API
+  version: 1.0.0
+  description: |
+    # AI-Persona SaaS Backend API - Core Authentication & User Management
+
+    ## **Overview**
+    This API provides enterprise-grade authentication and user management for the AI-Persona SaaS platform. The core module is designed for production environments with advanced security features and compliance.
+
+    ## **Core Features**
+    - **Authentication**: Local (email/password) and Google OAuth authentication
+    - **Account Lifecycle**: PENDING_VERIFY → ACTIVE → DEACTIVATED → PENDING_DELETION
+    - **Email Verification**: 24-hour TTL verification tokens with resend capability
+    - **Password Reset**: Secure token-based password reset with 1-hour TTL
+    - **Session Management**: Device tracking, session revocation, and token rotation
+    - **Account Lockout**: Automatic lockout after failed login attempts (5 attempts → 15 min)
+    - **GDPR Compliance**: Account deletion with 30-day grace period
+    - **Webhook Integration**: External service integration for persona trait updates
+
+    ## **Security Architecture**
+    - **JWT Security**: RSA-256 signing with key rotation and JWKS endpoint
+    - **Password Security**: Strength validation + HIBP breach detection
+    - **Account Protection**: Rate limiting, lockout, session management
+    - **Input Validation**: Comprehensive sanitization and validation
+    - **Audit Trail**: Complete event logging with IP, user agent, trace IDs
+
+    ## **Account Lifecycle**
+    ```
+    PENDING_VERIFY → ACTIVE → DEACTIVATED → PENDING_DELETION
+    ```
+
+    ## **Authentication Workflows**
+
+    ### **Local Authentication**
+    1. **Registration**: `POST /api/auth/register`
+       - Password strength validation (8+ chars, uppercase, lowercase, number, special)
+       - HIBP breach detection (real-time)
+       - Email verification required (24-hour TTL)
+       - Rate limited (5 requests/hour per IP)
+
+    2. **Email Verification**: `GET /api/auth/verify-email?token=`
+       - One-time token verification
+       - Sets status to ACTIVE
+       - Required before login
+
+    3. **Login**: `POST /api/auth/login`
+       - Email + password authentication
+       - Account lockout after 5 failed attempts (15 min)
+       - Session creation with device tracking
+       - Rate limited (10 requests/15min per IP)
+
+    4. **Token Refresh**: `POST /api/auth/refresh`
+       - Refresh token rotation
+       - Old token revocation on reuse
+       - New access + refresh tokens
+
+    ### **OAuth Authentication**
+    1. **Initiate**: `GET /api/auth/google`
+       - Redirects to Google OAuth
+       - Public endpoint
+
+    2. **Callback**: `GET /api/auth/google/callback`
+       - Handles Google response
+       - Automatic account creation
+       - Pre-verified email (OAuth users)
+       - Redirects to frontend with tokens
+
+    ### **Password Management**
+    1. **Request Reset**: `POST /api/auth/request-password-reset`
+       - Sends reset email (1-hour TTL)
+       - Rate limited (3 requests/hour per IP)
+
+    2. **Reset Password**: `POST /api/auth/reset-password`
+       - Validates new password strength
+       - HIBP breach detection
+       - Revokes all user sessions
+
+    ### **Account Management**
+    1. **Deactivate**: `POST /api/auth/deactivate`
+       - Sets status to DEACTIVATED
+       - Revokes all sessions
+       - Blocks login and token refresh
+
+    2. **Delete Account**: `POST /api/auth/delete-account`
+       - Sets status to PENDING_DELETION
+       - 30-day grace period
+       - GDPR compliance
+
+    ### **Session Management**
+    1. **List Sessions**: `GET /api/auth/sessions`
+       - Shows all active sessions
+       - Device info, IP, last activity
+
+    2. **Revoke Session**: `DELETE /api/auth/sessions/{sessionId}`
+       - Revokes specific session
+       - Immediate logout
+
+    3. **Logout**: `POST /api/auth/logout`
+       - Revokes current refresh token
+       - Idempotent operation
+
+    ### **Workspace Member Management**
+    1. **Smart Member Listing**: `GET /api/workspaces/{id}/members`
+       - Advanced filtering (search, status, role)
+       - Pagination support
+       - Admin-only access
+
+    2. **Role Management**: `PATCH /api/workspaces/{id}/members/{uid}/role`
+       - Promote/demote members
+       - Last admin protection
+       - Admin-only access
+
+    3. **Status Management**: `PATCH /api/workspaces/{id}/members/{uid}/status`
+       - Activate/deactivate members
+       - Session revocation on deactivation
+       - Last admin protection
+
+    4. **Force Password Reset**: `POST /api/workspaces/{id}/members/{uid}/force-reset`
+       - Generate reset token
+       - Send email notification
+       - Admin-only access
+
+    ### **Security Endpoints**
+    1. **JWKS Endpoint**: `GET /api/auth/.well-known/jwks.json`
+       - Public key set for JWT verification
+       - Supports key rotation
+       - Standard JWKS format
+
+    2. **Key Rotation**: `POST /api/auth/rotate-keys`
+       - Rotates RSA key pair (Admin only)
+       - Zero-downtime key rotation
+       - Maintains backward compatibility
+
+    ## **Rate Limiting**
+    - **Registration**: 5 requests/hour per IP
+    - **Login**: 10 requests/15min per IP
+    - **Password Reset**: 3 requests/hour per IP
+    - **Email Verification**: 5 requests/hour per IP
+
+    ## **Error Handling**
+    - **400**: Bad Request (validation errors)
+    - **401**: Unauthorized (invalid credentials)
+    - **403**: Forbidden (insufficient permissions)
+    - **404**: Not Found (resource not found)
+    - **409**: Conflict (resource already exists)
+    - **423**: Locked (account temporarily locked)
+    - **429**: Too Many Requests (rate limit exceeded)
+    - **500**: Internal Server Error
+
+    ## **Response Format**
+    ```json
+    {
+      "status": "success|error",
+      "message": "Human readable message",
+      "data": { ... },
+      "errors": [ ... ]
+    }
+    ```
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://api.ai-persona.com
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: User authentication and authorization
+  - name: User Management
+    description: User profile and account management
+  - name: Workspace Management
+    description: Workspace and member management
+  - name: Security
+    description: Security and key management
+  - name: Chat Sessions
+    description: Chat session management and tracking
+  - name: Webhooks
+    description: Webhook integration for external services
+
+paths:
+  # Health Check
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Check if the service is running
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  # Authentication Endpoints
+  /api/auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register new user
+      description: Create a new user account with email verification
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+                - name
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+                password:
+                  type: string
+                  minLength: 8
+                  example: "SecurePass123!"
+                name:
+                  type: string
+                  minLength: 2
+                  example: "John Doe"
+      responses:
+        "201":
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSuccessResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticate user with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+                password:
+                  type: string
+                  example: "SecurePass123!"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginSuccessResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Account not verified or deactivated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "423":
+          description: Account temporarily locked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh access token
+      description: Get new access token using refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        "200":
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenRefreshResponse"
+        "401":
+          description: Invalid refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: User logout
+      description: Logout user and revoke current session (requires authentication)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/verify-email:
+    get:
+      tags:
+        - Authentication
+      summary: Verify email address
+      description: Verify user email with token from verification email
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Email verification token
+      responses:
+        "200":
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/resend-verification:
+    post:
+      tags:
+        - Authentication
+      summary: Resend verification email
+      description: Send new verification email to user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+      responses:
+        "200":
+          description: Verification email sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/request-password-reset:
+    post:
+      tags:
+        - Authentication
+      summary: Request password reset
+      description: Send password reset email to user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+      responses:
+        "200":
+          description: Password reset email sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/reset-password:
+    post:
+      tags:
+        - Authentication
+      summary: Reset password
+      description: Reset password using token from email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - newPassword
+              properties:
+                token:
+                  type: string
+                  example: "reset_token_here"
+                newPassword:
+                  type: string
+                  minLength: 8
+                  example: "NewSecurePass123!"
+      responses:
+        "200":
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid token or weak password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/sessions:
+    get:
+      tags:
+        - Authentication
+      summary: Get user sessions
+      description: Get all active sessions for the authenticated user
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: User sessions retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/sessions/{sessionId}:
+    delete:
+      tags:
+        - Authentication
+      summary: Revoke session
+      description: Revoke a specific user session
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Session ID to revoke
+      responses:
+        "200":
+          description: Session revoked successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/deactivate:
+    post:
+      tags:
+        - Authentication
+      summary: Deactivate account
+      description: Deactivate user account (requires authentication)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Account deactivated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/delete-account:
+    post:
+      tags:
+        - Authentication
+      summary: Request account deletion
+      description: Request account deletion (GDPR compliance)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Account deletion requested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # OAuth Endpoints
+  /api/auth/google:
+    get:
+      tags:
+        - Authentication
+      summary: Google OAuth login
+      description: Redirect to Google OAuth for authentication
+      security: []
+      responses:
+        "302":
+          description: Redirect to Google OAuth
+
+  /api/auth/google/callback:
+    get:
+      tags:
+        - Authentication
+      summary: Google OAuth callback
+      description: Handle Google OAuth callback and create user session
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Authorization code from Google
+      responses:
+        "200":
+          description: OAuth login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginSuccessResponse"
+        "400":
+          description: OAuth error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Security Endpoints
+  /api/auth/.well-known/jwks.json:
+    get:
+      tags:
+        - Security
+      summary: Get JSON Web Key Set (JWKS)
+      description: Returns the JSON Web Key Set (JWKS) containing public keys for JWT verification
+      responses:
+        "200":
+          description: JWKS in standard format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kty:
+                          type: string
+                          example: "RSA"
+                        use:
+                          type: string
+                          example: "sig"
+                        kid:
+                          type: string
+                          example: "abc123"
+                        n:
+                          type: string
+                          example: "modulus"
+                        e:
+                          type: string
+                          example: "AQAB"
+
+  /api/auth/rotate-keys:
+    post:
+      tags:
+        - Security
+      summary: Rotate JWT keys (Admin only)
+      description: Rotates the RSA key pair used for JWT signing and verification
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Keys rotated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Keys rotated successfully"
+                  data:
+                    type: object
+                    properties:
+                      newKid:
+                        type: string
+                        example: "def456"
+                      oldKid:
+                        type: string
+                        example: "abc123"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden (admin only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Profile Management Endpoints
+  /api/users/me:
+    get:
+      tags:
+        - User Management
+      summary: Get current user profile
+      description: Get the current user's profile information
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags:
+        - User Management
+      summary: Update current user profile
+      description: Update the current user's profile information
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 50
+                  example: "John Doe"
+                avatarUrl:
+                  type: string
+                  format: uri
+                  example: "https://cdn.example.com/avatar.jpg"
+                timezone:
+                  type: string
+                  example: "America/New_York"
+                locale:
+                  type: string
+                  example: "en-US"
+      responses:
+        "200":
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: "#/components/schemas/UserProfile"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/users/me/avatar:
+    post:
+      tags:
+        - User Management
+      summary: Upload user avatar
+      description: Upload a new avatar image for the current user
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                avatar:
+                  type: string
+                  format: binary
+                  description: Image file (JPEG, PNG, GIF, WebP, max 2MB)
+          application/json:
+            schema:
+              type: object
+              properties:
+                presignedUrl:
+                  type: string
+                  format: uri
+                  description: Presigned URL for avatar upload
+      responses:
+        "200":
+          description: Avatar uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      avatarUrl:
+                        type: string
+                        format: uri
+                        example: "https://cdn.example.com/avatar.jpg"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/users/me/password:
+    put:
+      tags:
+        - User Management
+      summary: Change password
+      description: Change the current user's password
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                  example: "currentPassword123!"
+                newPassword:
+                  type: string
+                  minLength: 8
+                  example: "newPassword123!"
+      responses:
+        "200":
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  # Workspace Management Endpoints
+  /api/workspaces/{id}:
+    get:
+      tags:
+        - Workspace Management
+      summary: Get workspace details
+      description: Get workspace information for the current user's workspace
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+      responses:
+        "200":
+          description: Workspace details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      workspace:
+                        $ref: "#/components/schemas/Workspace"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags:
+        - Workspace Management
+      summary: Update workspace
+      description: Update workspace settings (Admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: "My Workspace"
+                timezone:
+                  type: string
+                  example: "America/New_York"
+                locale:
+                  type: string
+                  example: "en-US"
+      responses:
+        "200":
+          description: Workspace updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      workspace:
+                        $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/workspaces/{id}/members:
+    get:
+      tags:
+        - Workspace Management
+      summary: Smart member listing
+      description: Get workspace members with advanced filtering and pagination (Admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+          description: Search in email or name (case-insensitive)
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, DEACTIVATED, PENDING_VERIFY]
+          description: Filter by member status
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [ADMIN, MEMBER]
+          description: Filter by member role
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Number of members per page
+      responses:
+        "200":
+          description: List of workspace members with pagination
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkspaceMember"
+                  pagination:
+                    type: object
+                    properties:
+                      page:
+                        type: integer
+                        example: 1
+                      limit:
+                        type: integer
+                        example: 20
+                      total:
+                        type: integer
+                        example: 138
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/workspaces/{id}/members/{uid}/role:
+    patch:
+      tags:
+        - Workspace Management
+      summary: Change member role
+      description: Promote or demote a workspace member (Admin only). Cannot demote the last admin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Member user ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - role
+              properties:
+                role:
+                  type: string
+                  enum: [ADMIN, MEMBER]
+                  example: "ADMIN"
+      responses:
+        "200":
+          description: Member role updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      member:
+                        $ref: "#/components/schemas/WorkspaceMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Cannot demote last admin
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: "Cannot demote last admin"
+
+  /api/workspaces/{id}/members/{uid}/status:
+    patch:
+      tags:
+        - Workspace Management
+      summary: Change member status
+      description: Activate or deactivate a workspace member (Admin only). Cannot deactivate the last admin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Member user ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [ACTIVE, DEACTIVATED, PENDING_VERIFY]
+                  example: "ACTIVE"
+      responses:
+        "200":
+          description: Member status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      member:
+                        $ref: "#/components/schemas/WorkspaceMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Cannot deactivate last admin
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: "Cannot deactivate the last admin in the workspace"
+
+  /api/workspaces/{id}/members/{uid}:
+    delete:
+      tags:
+        - Workspace Management
+      summary: Remove member
+      description: Remove a member from the workspace (Admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Member user ID
+      responses:
+        "200":
+          description: Member removed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/workspaces/{id}/delete:
+    post:
+      tags:
+        - Workspace Management
+      summary: Request workspace deletion
+      description: Request deletion of the workspace (Admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Workspace ID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 500
+                  example: "No longer needed"
+      responses:
+        "200":
+          description: Workspace deletion requested successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # Persona Endpoints
+  /api/personas:
+    get:
+      tags:
+        - Personas
+      summary: List all personas
+      description: Get a list of all available personas with optional favourites filter
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: favouritesOnly
+          in: query
+          description: Filter to show only favourited personas
+          required: false
+          schema:
+            type: boolean
+            example: false
+      responses:
+        "200":
+          description: Personas retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Personas retrieved successfully"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Persona"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/personas/{id}:
+    get:
+      tags:
+        - Personas
+      summary: Get persona details
+      description: Get detailed information about a specific persona
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Persona ID
+          schema:
+            type: string
+            example: "persona_id_here"
+      responses:
+        "200":
+          description: Persona retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Persona retrieved successfully"
+                  data:
+                    $ref: "#/components/schemas/Persona"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/personas/{id}/favourite:
+    post:
+      tags:
+        - Personas
+      summary: Toggle persona favourite
+      description: Add or remove a persona from user's favourites
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Persona ID
+          schema:
+            type: string
+            example: "persona_id_here"
+      responses:
+        "200":
+          description: Favourite status toggled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Persona added to favourites"
+                  data:
+                    type: object
+                    properties:
+                      isFavourited:
+                        type: boolean
+                        example: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/personas/{id}/chat:
+    post:
+      tags:
+        - Personas
+      summary: Send message to persona
+      description: Send a message to a persona and get a response via webhook
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Persona ID
+          schema:
+            type: string
+            example: "persona_id_here"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                  maxLength: 10000
+                  example: "Hello, how are you today?"
+                conversationId:
+                  type: string
+                  format: uuid
+                  description: Optional conversation ID to continue existing conversation
+                  example: "conversation_id_here"
+                fileId:
+                  type: string
+                  description: Optional file ID for file attachment
+                  example: "file_id_here"
+      responses:
+        "200":
+          description: Message sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Message sent successfully"
+                  data:
+                    type: object
+                    properties:
+                      reply:
+                        type: string
+                        example: "Hello! I'm doing well, thank you for asking."
+                      conversationId:
+                        type: string
+                        example: "conversation_id_here"
+                      messageId:
+                        type: string
+                        example: "message_id_here"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # Chat Session Management
+  /api/chat-sessions:
+    get:
+      tags:
+        - Chat Sessions
+      summary: Get user's chat sessions
+      description: |
+        Get a list of chat sessions for the authenticated user.
+        Supports filtering by status and pagination.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          description: Filter by session status
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, COMPLETED, FAILED, TIMEOUT, CANCELLED]
+            example: "ACTIVE"
+        - name: limit
+          in: query
+          description: Number of sessions to return (max 100)
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+            example: 50
+        - name: offset
+          in: query
+          description: Number of sessions to skip
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+            example: 0
+      responses:
+        "200":
+          description: Chat sessions retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "User chat sessions retrieved successfully"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChatSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/chat-sessions/{sessionId}:
+    get:
+      tags:
+        - Chat Sessions
+      summary: Get specific chat session
+      description: |
+        Get details of a specific chat session including all messages.
+        Users can only access their own sessions.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: Chat session ID
+          schema:
+            type: string
+            example: "abc123def456"
+      responses:
+        "200":
+          description: Chat session retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Chat session retrieved successfully"
+                  data:
+                    $ref: "#/components/schemas/ChatSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+    delete:
+      tags:
+        - Chat Sessions
+      summary: Delete chat session
+      description: |
+        Permanently delete a chat session and all associated messages.
+        Users can only delete their own sessions.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: Chat session ID to delete
+          schema:
+            type: string
+            example: "abc123def456"
+      responses:
+        "200":
+          description: Chat session deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Chat session deleted successfully"
+                  data:
+                    type: object
+                    properties:
+                      sessionId:
+                        type: string
+                        example: "abc123def456"
+                      deletedAt:
+                        type: string
+                        format: date-time
+                        example: "2024-01-15T10:30:00Z"
+                      messageCount:
+                        type: integer
+                        example: 5
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/conversations:
+    get:
+      tags:
+        - Conversations
+      summary: List user conversations
+      description: |
+        Get a list of conversations for the authenticated user.
+        Returns user's private conversations plus all shared conversations in their workspace.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: archived
+          in: query
+          description: Include archived conversations
+          required: false
+          schema:
+            type: boolean
+            example: false
+      responses:
+        "200":
+          description: Conversations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Conversations retrieved successfully"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Conversation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/conversations/{id}/visibility:
+    patch:
+      tags:
+        - Conversations
+      summary: Update conversation visibility
+      description: |
+        Update conversation visibility to PRIVATE or SHARED.
+        Only conversation owner or workspace admin can change visibility.
+        Cannot change visibility of archived conversations.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema:
+            type: string
+            format: uuid
+            example: "conversation_id_here"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - visibility
+              properties:
+                visibility:
+                  type: string
+                  enum: [PRIVATE, SHARED]
+                  example: "SHARED"
+      responses:
+        "200":
+          description: Conversation visibility updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Conversation visibility updated successfully"
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: "conversation_id_here"
+                      visibility:
+                        type: string
+                        enum: [PRIVATE, SHARED]
+                        example: "SHARED"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Cannot change visibility of archived conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Cannot change visibility of archived conversation"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/messages/{id}:
+    patch:
+      tags:
+        - Messages
+      summary: Edit message
+      description: |
+        Edit a user message and branch the conversation (ChatGPT-style).
+        Only user messages can be edited within 10 minutes of creation.
+        All messages after the edited message will be soft-deleted and a new AI response will be generated.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Message ID
+          schema:
+            type: string
+            format: uuid
+            example: "message_id_here"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - content
+              properties:
+                content:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+                  example: "Can you explain this in more detail?"
+      responses:
+        "200":
+          description: Message edited successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Message edited successfully"
+                  data:
+                    type: object
+                    properties:
+                      editedMessageId:
+                        type: string
+                        example: "message_id_here"
+                      assistantMessageId:
+                        type: string
+                        example: "new_reply_id_here"
+                      conversationId:
+                        type: string
+                        example: "conversation_id_here"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Message cannot be edited
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Messages can only be edited within 10 minutes"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/conversations/{id}/files:
+    post:
+      tags:
+        - Files
+      summary: Request file upload URL
+      description: |
+        Request a presigned upload URL for file attachment.
+        Only conversation owner or workspace member can upload files.
+        Supports images and PDFs up to 10 MB.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema:
+            type: string
+            format: uuid
+            example: "conversation_id_here"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - filename
+                - mimeType
+                - sizeBytes
+              properties:
+                filename:
+                  type: string
+                  maxLength: 200
+                  example: "document.pdf"
+                mimeType:
+                  type: string
+                  pattern: "^(image/|application/pdf)$"
+                  example: "application/pdf"
+                sizeBytes:
+                  type: integer
+                  minimum: 1
+                  maximum: 10485760
+                  example: 1024000
+      responses:
+        "200":
+          description: File upload URL generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "File upload URL generated successfully"
+                  data:
+                    type: object
+                    properties:
+                      presignedUrl:
+                        type: string
+                        format: uri
+                        example: "https://example.com/uploads/file_id"
+                      fileId:
+                        type: string
+                        example: "file_id_here"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: File too large
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "File size must be less than 10 MB"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/messages/{id}/reactions:
+    post:
+      tags:
+        - Reactions
+      summary: Toggle message reaction
+      description: |
+        Add or toggle a reaction to a message.
+        Sending the same reaction type again removes it.
+        Sending a different type updates the reaction.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Message ID
+          schema:
+            type: string
+            format: uuid
+            example: "message_id_here"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  enum: [LIKE, DISLIKE]
+                  example: "LIKE"
+      responses:
+        "200":
+          description: Reaction toggled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Reaction added successfully"
+                  data:
+                    type: object
+                    properties:
+                      messageId:
+                        type: string
+                        example: "message_id_here"
+                      type:
+                        type: string
+                        enum: [LIKE, DISLIKE]
+                        example: "LIKE"
+                      action:
+                        type: string
+                        enum: [added, removed, updated]
+                        example: "added"
+                      toggled:
+                        type: boolean
+                        example: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/conversations/{id}/archive:
+    patch:
+      tags:
+        - Conversations
+      summary: Archive or unarchive conversation
+      description: |
+        Archive or unarchive a conversation.
+        Only conversation owner or workspace admin can archive.
+        Archived conversations cannot be edited, receive new messages, or change visibility.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema:
+            type: string
+            format: uuid
+            example: "conversation_id_here"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - archived
+              properties:
+                archived:
+                  type: boolean
+                  example: true
+      responses:
+        "200":
+          description: Conversation archive status updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Conversation archived successfully"
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: "conversation_id_here"
+                      archived:
+                        type: boolean
+                        example: true
+                      archivedAt:
+                        type: string
+                        format: date-time
+                        example: "2025-08-05T08:40:00.000Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Conversation cannot be archived
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Conversation is already archived"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/conversations/{id}/share:
+    post:
+      tags:
+        - Conversations
+      summary: Create or refresh shareable link
+      description: |
+        Create or refresh a shareable link for a conversation.
+        Only SHARED conversations can have shareable links.
+        Archived conversations cannot be shared.
+        Only conversation owner or workspace admin can share.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Conversation ID
+          schema:
+            type: string
+            format: uuid
+            example: "conversation_id_here"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expiresInDays:
+                  type: integer
+                  minimum: 1
+                  maximum: 365
+                  default: 30
+                  description: Days until link expires
+                  example: 30
+      responses:
+        "200":
+          description: Shareable link created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Shareable link created successfully"
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                        example: "https://app.com/p/abc123def456"
+                      expiresAt:
+                        type: string
+                        format: date-time
+                        example: "2025-09-04T08:40:00.000Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Conversation cannot be shared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Only SHARED conversations can have shareable links"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /p/{token}:
+    get:
+      tags:
+        - Public
+      summary: Get shared conversation
+      description: |
+        Get a shared conversation by token.
+        Returns USER and ASSISTANT messages only.
+        Returns 410 if link has expired.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: Share token
+          schema:
+            type: string
+            minLength: 16
+            example: "abc123def456ghi789jkl012"
+      responses:
+        "200":
+          description: Shared conversation retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Shared conversation retrieved successfully"
+                  data:
+                    type: object
+                    properties:
+                      conversationId:
+                        type: string
+                        example: "conversation_id_here"
+                      persona:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            example: "AI Assistant"
+                          description:
+                            type: string
+                            example: "A helpful AI assistant"
+                      messages:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            role:
+                              type: string
+                              enum: [USER, ASSISTANT]
+                              example: "USER"
+                            content:
+                              type: string
+                              example: "Hello, how are you?"
+                            fileUrl:
+                              type: string
+                              format: uri
+                              nullable: true
+                              example: "https://example.com/file.pdf"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Shared link not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Shared link not found"
+        "410":
+          description: Shared link has expired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Shared link has expired"
+
+  # Webhook Integration Endpoints
+  /api/webhooks/health:
+    get:
+      tags:
+        - Webhooks
+      summary: Webhook service health check
+      description: Check if the webhook service is running and healthy
+      security: []
+      responses:
+        "200":
+          description: Webhook service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Webhook service is healthy"
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: "healthy"
+                      timestamp:
+                        type: string
+                        format: date-time
+                        example: "2024-01-15T10:30:00Z"
+                      service:
+                        type: string
+                        example: "webhook-service"
+
+  /api/webhooks/traits:
+    post:
+      tags:
+        - Webhooks
+      summary: Update persona traits via webhook
+      description: |
+        Update persona traits from external services (e.g., n8n workflows).
+        Requires ADMIN role authentication.
+        If persona doesn't exist, returns 404.
+        If traits already exist, they will be replaced with new ones.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - personaName
+                - metadata
+              properties:
+                personaName:
+                  type: string
+                  description: Exact name of the persona to update
+                  example: "HR Ops / Payroll Manager"
+                metadata:
+                  type: object
+                  required:
+                    - about
+                    - coreExpertise
+                    - communicationStyle
+                    - traits
+                    - painPoints
+                    - keyResponsibilities
+                  properties:
+                    about:
+                      type: string
+                      description: Persona description (1-3 sentences)
+                      example: "A process-driven HR professional focused on compliance and efficiency"
+                    coreExpertise:
+                      type: array
+                      items:
+                        type: string
+                      description: List of core expertise areas (8±2 items)
+                      example:
+                        [
+                          "Payroll Management",
+                          "Compliance",
+                          "Employee Relations",
+                        ]
+                    communicationStyle:
+                      type: string
+                      description: Communication style description (2-4 sentences)
+                      example: "Direct and professional, prefers structured communication"
+                    traits:
+                      type: array
+                      items:
+                        type: string
+                      description: List of behavioral traits (8-12 items)
+                      example:
+                        [
+                          "Process-driven – enforces standardized workflows",
+                          "Detail-oriented – maintains accurate records",
+                        ]
+                    painPoints:
+                      type: array
+                      items:
+                        type: string
+                      description: List of pain points with category labels (6-10 items)
+                      example:
+                        [
+                          "Role-specific: Complex compliance requirements",
+                          "Systemic: Manual process inefficiencies",
+                        ]
+                    keyResponsibilities:
+                      type: array
+                      items:
+                        type: string
+                      description: List of key responsibilities (8-12 items)
+                      example:
+                        [
+                          "Manage payroll processing",
+                          "Ensure compliance with labor laws",
+                        ]
+      responses:
+        "200":
+          description: Persona traits updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Persona traits updated successfully"
+                  data:
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                        example: true
+                      message:
+                        type: string
+                        example: "Persona traits updated successfully"
+                      persona:
+                        $ref: "#/components/schemas/Persona"
+        "400":
+          description: Invalid webhook payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Webhook validation failed: metadata is required"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Insufficient permissions (ADMIN role required)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "ADMIN role required for webhook operations"
+        "404":
+          description: Persona not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Persona with name 'HR Ops / Payroll Manager' not found"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "error"
+                  message:
+                    type: string
+                    example: "Failed to update persona traits"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    # Common Response Schemas
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Operation completed successfully"
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "error"
+        message:
+          type: string
+          example: "Error message"
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: "email"
+              message:
+                type: string
+                example: "Invalid email format"
+
+    # Authentication Response Schemas
+    AuthSuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "User registered successfully"
+        data:
+          type: object
+          properties:
+            user:
+              $ref: "#/components/schemas/User"
+            workspace:
+              $ref: "#/components/schemas/Workspace"
+            isNewUser:
+              type: boolean
+              example: true
+            breachWarning:
+              type: object
+              nullable: true
+              properties:
+                message:
+                  type: string
+                  example: "Password found in data breaches"
+                severity:
+                  type: string
+                  enum: [low, medium, high]
+                  example: "medium"
+                count:
+                  type: integer
+                  example: 1234
+
+    LoginSuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Login successful"
+        data:
+          type: object
+          properties:
+            user:
+              $ref: "#/components/schemas/User"
+            workspace:
+              $ref: "#/components/schemas/Workspace"
+            accessToken:
+              type: string
+              example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+            refreshToken:
+              type: string
+              example: "refresh_token_here"
+            sessionId:
+              type: string
+              example: "session_id_here"
+
+    TokenRefreshResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Token refreshed successfully"
+        data:
+          type: object
+          properties:
+            accessToken:
+              type: string
+              example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+            refreshToken:
+              type: string
+              example: "new_refresh_token_here"
+
+    SessionsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Sessions retrieved successfully"
+        data:
+          type: object
+          properties:
+            sessions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Session"
+
+    # User Management Response Schemas
+    UserProfileResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Profile retrieved successfully"
+        data:
+          type: object
+          properties:
+            user:
+              $ref: "#/components/schemas/User"
+
+    UsersListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Users retrieved successfully"
+        data:
+          type: object
+          properties:
+            users:
+              type: array
+              items:
+                $ref: "#/components/schemas/User"
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+
+    UserResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "User updated successfully"
+        data:
+          type: object
+          properties:
+            user:
+              $ref: "#/components/schemas/User"
+
+    WorkspaceStatsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Workspace statistics retrieved"
+        data:
+          type: object
+          properties:
+            workspace:
+              $ref: "#/components/schemas/Workspace"
+            stats:
+              type: object
+              properties:
+                totalUsers:
+                  type: integer
+                  example: 42
+                activeUsers:
+                  type: integer
+                  example: 38
+                pendingVerification:
+                  type: integer
+                  example: 3
+                deactivatedUsers:
+                  type: integer
+                  example: 1
+
+    # Data Models
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user_id_here"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        name:
+          type: string
+          example: "John Doe"
+        status:
+          type: string
+          enum: [PENDING_VERIFY, ACTIVE, DEACTIVATED, PENDING_DELETION]
+          example: "ACTIVE"
+        role:
+          type: string
+          enum: [ADMIN, MEMBER]
+          example: "MEMBER"
+        emailVerified:
+          type: boolean
+          example: true
+        verifiedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+        lastLoginAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "workspace_id_here"
+        name:
+          type: string
+          example: "My Workspace"
+        domain:
+          type: string
+          example: "example.com"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "session_id_here"
+        deviceId:
+          type: string
+          example: "device_id_here"
+        userAgent:
+          type: string
+          example: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+        ipAddress:
+          type: string
+          example: "192.168.1.1"
+        isActive:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+        expiresAt:
+          type: string
+          format: date-time
+          example: "2024-01-22T10:30:00Z"
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user_id_here"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        name:
+          type: string
+          example: "John Doe"
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+          example: "https://cdn.example.com/avatar.jpg"
+        timezone:
+          type: string
+          example: "America/New_York"
+        locale:
+          type: string
+          example: "en-US"
+        emailVerified:
+          type: boolean
+          example: true
+        status:
+          type: string
+          enum: [PENDING_VERIFY, ACTIVE, DEACTIVATED, PENDING_DELETION]
+          example: "ACTIVE"
+        role:
+          type: string
+          enum: [ADMIN, MEMBER]
+          example: "MEMBER"
+        workspaceId:
+          type: string
+          example: "workspace_id_here"
+        lastLoginAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+
+    WorkspaceMember:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user_id_here"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        name:
+          type: string
+          example: "John Doe"
+        role:
+          type: string
+          enum: [ADMIN, MEMBER]
+          example: "MEMBER"
+        status:
+          type: string
+          enum: [PENDING_VERIFY, ACTIVE, DEACTIVATED, PENDING_DELETION]
+          example: "ACTIVE"
+        lastLoginAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00Z"
+
+    ApiResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Operation completed successfully"
+        data:
+          type: object
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 100
+        pages:
+          type: integer
+          example: 5
+        hasNext:
+          type: boolean
+          example: true
+        hasPrev:
+          type: boolean
+          example: false
+
+    # Persona and Conversation Schemas
+    Persona:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "persona_id_here"
+        name:
+          type: string
+          example: "AI Assistant"
+        description:
+          type: string
+          example: "A helpful AI assistant for general questions"
+        avatarUrl:
+          type: string
+          format: uri
+          example: "https://example.com/avatar.jpg"
+        isActive:
+          type: boolean
+          example: true
+        isAvailable:
+          type: boolean
+          example: true
+        isFavourited:
+          type: boolean
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+        _count:
+          type: object
+          properties:
+            conversations:
+              type: integer
+              example: 5
+            messages:
+              type: integer
+              example: 25
+
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "conversation_id_here"
+        title:
+          type: string
+          example: "Chat with AI Assistant"
+        persona:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "persona_id_here"
+            name:
+              type: string
+              example: "AI Assistant"
+            avatarUrl:
+              type: string
+              format: uri
+              example: "https://example.com/avatar.jpg"
+        owner:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "user_id_here"
+            name:
+              type: string
+              example: "John Doe"
+            email:
+              type: string
+              format: email
+              example: "john@example.com"
+        visibility:
+          type: string
+          enum: [PRIVATE, SHARED]
+          example: "PRIVATE"
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        lastMessage:
+          type: string
+          example: "Hello! How can I help you today?"
+        messageCount:
+          type: integer
+          example: 10
+        createdAt:
+          type: string
+          format: date-time
+          example: "2024-01-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00Z"
+
+    ChatSession:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "session_123"
+        sessionId:
+          type: string
+          example: "abc123def456"
+        conversationId:
+          type: string
+          example: "conv_456"
+        personaId:
+          type: string
+          example: "persona_789"
+        userId:
+          type: string
+          example: "user_123"
+        status:
+          type: string
+          enum: [ACTIVE, COMPLETED, FAILED, TIMEOUT, CANCELLED]
+          example: "COMPLETED"
+        startedAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:00:00Z"
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2024-01-15T10:05:00Z"
+        lastActivityAt:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:05:00Z"
+        metadata:
+          type: object
+          nullable: true
+          properties:
+            userAgent:
+              type: string
+              example: "Mozilla/5.0..."
+            ipAddress:
+              type: string
+              example: "192.168.1.1"
+            deviceInfo:
+              type: string
+              example: "Chrome/120.0.0.0"
+        errorMessage:
+          type: string
+          nullable: true
+          example: "Webhook timeout"
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+        persona:
+          $ref: "#/components/schemas/Persona"
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "user_123"
+            email:
+              type: string
+              example: "user@example.com"
+            name:
+              type: string
+              example: "John Doe"
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                example: "msg_123"
+              content:
+                type: string
+                example: "Hello, how are you?"
+              role:
+                type: string
+                enum: [USER, ASSISTANT]
+                example: "USER"
+              createdAt:
+                type: string
+                format: date-time
+                example: "2024-01-15T10:01:00Z"
+      required:
+        - id
+        - sessionId
+        - conversationId
+        - personaId
+        - userId
+        - status
+        - startedAt
+        - lastActivityAt
+
+  # Common Response Definitions
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Bad request"
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    field:
+                      type: string
+                      example: "email"
+                    message:
+                      type: string
+                      example: "Invalid email format"
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Authentication required"
+
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Insufficient permissions"
+
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Resource not found"
+
+    ValidationError:
+      description: Validation Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Validation failed"
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    field:
+                      type: string
+                      example: "email"
+                    message:
+                      type: string
+                      example: "Invalid email format"
+
+    TooManyRequests:
+      description: Too Many Requests
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Too many requests, please try again later"
+
+    BadGateway:
+      description: Bad Gateway
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Failed to get response from persona"
+
+    ServiceUnavailable:
+      description: Service Unavailable
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Persona is temporarily unavailable"

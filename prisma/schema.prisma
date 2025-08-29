@@ -1,0 +1,519 @@
+// ===================================
+// AI-Persona Backend - Database Schema (CORE AUTHENTICATION & USER MANAGEMENT)
+// ===================================
+// Only models/fields/enums used in backend code are kept
+
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// ===================================
+// USER MODEL (single-workspace membership)
+// ===================================
+model User {
+    id            String   @id @default(cuid())
+    email         String   @unique
+    name          String?
+    passwordHash  String?  // Nullable for OAuth-only users
+    status        UserStatus @default(PENDING_VERIFY)
+    emailVerified Boolean  @default(false)
+    verifiedAt    DateTime? // When email was verified
+    failedLoginCount Int    @default(0)
+    lockedUntil   DateTime? // Account lockout until
+    lastLoginAt   DateTime?
+    role          MemberRole @default(MEMBER)
+    createdAt     DateTime @default(now())
+    updatedAt     DateTime @updatedAt
+    workspaceId   String
+    workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+    
+    // Profile fields
+    avatarUrl     String?  // CDN URL for user avatar
+    timezone      String?  @default("UTC")
+    locale        String?  @default("en")
+
+    sessions      Session[]
+    emailVerifications EmailVerification[]
+    passwordResetTokens PasswordResetToken[]
+    auditEvents   AuditEvent[]
+    personaFavourites PersonaFavourite[]
+    conversations Conversation[]
+    messages    Message[]
+    files       File[]
+    reactions   Reaction[]
+    chatSessions ChatSession[]
+    
+    @@map("users")
+    @@index([email])
+    @@index([status])
+    @@index([emailVerified])
+    @@index([failedLoginCount])
+    @@index([lockedUntil])
+    @@index([workspaceId])
+    @@index([status, createdAt]) // For cleanup queries
+}
+
+// ===================================
+// WORKSPACE MODEL
+// ===================================
+model Workspace {
+    id          String   @id @default(cuid())
+    name        String
+    domain      String   @unique
+    isActive    Boolean  @default(true)
+    maxMembers  Int      @default(1000)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+    
+    // Workspace settings
+    timezone    String?  @default("UTC")
+    locale      String?  @default("en")
+    status      WorkspaceStatus @default(ACTIVE)
+    
+    users       User[]
+    deletionRequest WorkspaceDeletion?
+
+    @@map("workspaces")
+    @@index([domain])
+    @@index([isActive])
+    @@index([status])
+}
+
+// ===================================
+// WORKSPACE DELETION MODEL
+// ===================================
+model WorkspaceDeletion {
+    id          String   @id @default(cuid())
+    workspaceId String   @unique
+    workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+    requestedBy String   // User ID who requested deletion
+    reason      String?
+    purgeAfter  DateTime // When workspace will be permanently deleted
+    createdAt   DateTime @default(now())
+    
+    @@map("workspace_deletions")
+    @@index([workspaceId])
+    @@index([purgeAfter])
+}
+
+// ===================================
+// SESSION MODEL
+// ===================================
+model Session {
+    id            String   @id @default(cuid())
+    refreshToken  String   @unique
+    expiresAt     DateTime
+    isActive      Boolean  @default(true)
+    lastUsedAt    DateTime @default(now())
+    createdAt     DateTime @default(now())
+    updatedAt     DateTime @updatedAt
+    userId        String
+    userAgent     String?  // Browser/device info
+    ipAddress     String?  // IP address
+    deviceId      String?  // Unique device identifier
+    user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    
+    @@map("sessions")
+    @@index([userId])
+    @@index([refreshToken])
+    @@index([expiresAt])
+    @@index([isActive])
+    @@index([userId, deviceId]) // For device-specific queries
+}
+
+// ===================================
+// EMAIL VERIFICATION MODEL
+// ===================================
+model EmailVerification {
+    id        String   @id @default(cuid())
+    userId    String
+    token     String   @unique
+    expiresAt DateTime
+    user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    createdAt DateTime @default(now())
+    
+    @@map("email_verifications")
+    @@index([userId])
+    @@index([token])
+    @@index([expiresAt])
+}
+
+// ===================================
+// PASSWORD RESET TOKEN MODEL
+// ===================================
+model PasswordResetToken {
+    id        String   @id @default(cuid())
+    userId    String
+    token     String   @unique
+    expiresAt DateTime
+    used      Boolean  @default(false)
+    usedAt    DateTime?
+    user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    createdAt DateTime @default(now())
+    
+    @@map("password_reset_tokens")
+    @@index([userId])
+    @@index([token])
+    @@index([expiresAt])
+    @@index([used])
+}
+
+// ===================================
+// AUDIT EVENT MODEL
+// ===================================
+model AuditEvent {
+    id          String      @id @default(cuid())
+    userId      String
+    eventType   AuditEventType
+    eventData   Json?       // Additional event data
+    ipAddress   String?
+    userAgent   String?
+    traceId     String?     // Request trace ID
+    createdAt   DateTime    @default(now())
+    
+    user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    
+    @@map("audit_events")
+    @@index([userId])
+    @@index([eventType])
+    @@index([createdAt])
+    @@index([traceId])
+}
+
+// ===================================
+// PERSONA MODEL
+// ===================================
+model Persona {
+    id                  String   @id @default(cuid())
+    name                String
+    personalName        String?  // The actual name of the persona (e.g., "Sarah Chen", "John Smith")
+    personaRole         String?  // The role this persona represents (e.g., "CFO", "Marketing Manager")
+    about               String?  // Brief description about the persona
+    traits              Json?  // Key personality traits
+    painPoints          Json?  // Common pain points this persona faces
+    coreExpertise       Json?  // Areas of expertise
+    communicationStyle  String?  // How this persona communicates
+    keyResponsibility   Json?  // Primary responsibilities
+    description         String?  // Legacy field - kept for backward compatibility
+    avatarUrl           String?
+    webhookUrl          String   // Encrypted webhook URL
+    isActive            Boolean  @default(true)
+    createdAt           DateTime @default(now())
+    updatedAt           DateTime @updatedAt
+    
+    // Relations
+    favourites  PersonaFavourite[]
+    conversations Conversation[]
+    messages    Message[]
+    chatSessions ChatSession[]
+    
+    @@map("personas")
+    @@index([isActive])
+    @@index([createdAt])
+}
+
+// ===================================
+// PERSONA FAVOURITE MODEL
+// ===================================
+model PersonaFavourite {
+    id        String   @id @default(cuid())
+    userId    String
+    personaId String
+    createdAt DateTime @default(now())
+    
+    // Relations
+    user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    persona   Persona  @relation(fields: [personaId], references: [id], onDelete: Cascade)
+    
+    @@unique([userId, personaId])
+    @@map("persona_favourites")
+    @@index([userId])
+    @@index([personaId])
+    @@index([createdAt])
+}
+
+// ===================================
+// CONVERSATION MODEL
+// ===================================
+model Conversation {
+    id          String   @id @default(cuid())
+    userId      String
+    personaId   String
+    title       String?  // Auto-generated from first message
+    visibility  ConversationVisibility @default(PRIVATE)
+    archivedAt  DateTime?
+    isActive    Boolean  @default(true)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+    
+    // Relations
+    user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    persona     Persona  @relation(fields: [personaId], references: [id], onDelete: Cascade)
+    messages    Message[]
+    files       File[]
+    sharedLink  SharedLink?
+    chatSessions ChatSession[]
+    
+    @@map("conversations")
+    @@index([userId])
+    @@index([personaId])
+    @@index([isActive])
+    @@index([createdAt])
+    @@index([userId, isActive])
+    @@index([visibility])
+    @@index([archivedAt])
+    @@index([userId, visibility])
+}
+
+// ===================================
+// MESSAGE MODEL
+// ===================================
+model Message {
+    id             String   @id @default(cuid())
+    conversationId String
+    personaId      String
+    userId         String?  // User who created the message
+    fileId         String?  // Optional file attachment
+    content        String
+    role           MessageRole
+    edited         Boolean  @default(false)
+    deleted        Boolean  @default(false)
+    createdAt      DateTime @default(now())
+    
+    // Relations
+    conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    persona       Persona      @relation(fields: [personaId], references: [id], onDelete: Cascade)
+    user          User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+    file          File?        @relation(fields: [fileId], references: [id], onDelete: SetNull)
+    edits         MessageEdit[]
+    reactions     Reaction[]
+    chatSession   ChatSession? @relation(fields: [chatSessionId], references: [id])
+    chatSessionId String?
+    
+    @@map("messages")
+    @@index([conversationId])
+    @@index([personaId])
+    @@index([role])
+    @@index([createdAt])
+    @@index([conversationId, createdAt])
+    @@index([userId])
+    @@index([edited])
+    @@index([deleted])
+    @@index([fileId])
+    @@index([chatSessionId])
+}
+
+// ===================================
+// CHAT SESSION MODEL
+// ===================================
+model ChatSession {
+    id              String        @id @default(cuid())
+    conversationId  String
+    personaId       String
+    userId          String
+    sessionId       String        @unique // Unique session identifier for n8n
+    status          ChatSessionStatus @default(ACTIVE)
+    startedAt       DateTime      @default(now())
+    endedAt         DateTime?
+    lastActivityAt  DateTime      @default(now())
+    metadata        Json?         // Additional session data (user agent, IP, etc.)
+    errorMessage    String?       // Error details if session failed
+    
+    // Relations
+    conversation    Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    persona        Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)
+    user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+    messages       Message[]
+    
+    @@map("chat_sessions")
+    @@index([conversationId])
+    @@index([personaId])
+    @@index([userId])
+    @@index([sessionId])
+    @@index([status])
+    @@index([startedAt])
+    @@index([lastActivityAt])
+    @@index([conversationId, status])
+    @@index([userId, status])
+}
+
+// ===================================
+// MESSAGE EDIT MODEL
+// ===================================
+model MessageEdit {
+    id        String   @id @default(cuid())
+    messageId String
+    oldContent String
+    editedAt  DateTime @default(now())
+    
+    // Relations
+    message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+    
+    @@map("message_edits")
+    @@index([messageId])
+    @@index([editedAt])
+}
+
+// ===================================
+// FILE MODEL
+// ===================================
+model File {
+    id          String   @id @default(cuid())
+    conversationId String
+    userId      String
+    filename    String
+    mimeType    String
+    sizeBytes   Int
+    url         String?  // Will be updated after upload
+    uploadedAt  DateTime?
+    createdAt   DateTime @default(now())
+    
+    // Relations
+    conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    messages    Message[]
+    
+    @@map("files")
+    @@index([conversationId])
+    @@index([userId])
+    @@index([uploadedAt])
+}
+
+// ===================================
+// REACTION MODEL
+// ===================================
+model Reaction {
+    id        String   @id @default(cuid())
+    messageId String
+    userId    String
+    type      ReactionType
+    createdAt DateTime @default(now())
+    
+    // Relations
+    message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+    user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+    
+    @@unique([messageId, userId])
+    @@map("reactions")
+    @@index([messageId])
+    @@index([userId])
+    @@index([type])
+    @@index([createdAt])
+}
+
+// ===================================
+// SHARED LINK MODEL
+// ===================================
+model SharedLink {
+    id            String   @id @default(cuid())
+    conversationId String   @unique
+    token         String   @unique
+    expiresAt     DateTime
+    createdAt     DateTime @default(now())
+    
+    // Relations
+    conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    
+    @@map("shared_links")
+    @@index([token])
+    @@index([expiresAt])
+    @@index([conversationId])
+}
+
+// ===================================
+// MESSAGE ROLE ENUM
+// ===================================
+enum MessageRole {
+    USER
+    ASSISTANT
+}
+
+// ===================================
+// CONVERSATION VISIBILITY ENUM
+// ===================================
+enum ConversationVisibility {
+    PRIVATE
+    SHARED
+}
+
+// ===================================
+// REACTION TYPE ENUM
+// ===================================
+enum ReactionType {
+    LIKE
+    DISLIKE
+}
+
+// ===================================
+// CHAT SESSION STATUS ENUM
+// ===================================
+enum ChatSessionStatus {
+    ACTIVE      // Session is currently active
+    COMPLETED   // Session completed successfully
+    FAILED      // Session failed with error
+    TIMEOUT     // Session timed out
+    CANCELLED   // Session was cancelled
+}
+
+// ===================================
+// ENUMS
+// ===================================
+enum UserStatus {
+    PENDING_VERIFY
+    ACTIVE
+    DEACTIVATED
+    PENDING_DELETION
+}
+
+enum MemberRole {
+    ADMIN
+    MEMBER
+}
+
+enum WorkspaceStatus {
+    ACTIVE
+    PENDING_DELETION
+    DELETED
+}
+
+enum AuditEventType {
+    REGISTER
+    VERIFY_EMAIL
+    LOGIN_SUCCESS
+    LOGIN_FAILED
+    LOGOUT
+    REFRESH_TOKEN
+    REQUEST_PASSWORD_RESET
+    RESET_PASSWORD
+    CHANGE_PASSWORD
+    DEACTIVATE_ACCOUNT
+    REACTIVATE_ACCOUNT
+    ROLE_CHANGED
+    SESSION_REVOKED
+    ACCOUNT_LOCKED
+    ACCOUNT_UNLOCKED
+    PROFILE_UPDATED
+    AVATAR_UPLOADED
+    WORKSPACE_UPDATED
+    MEMBER_ROLE_CHANGED
+    MEMBER_REMOVED
+    WORKSPACE_DELETION_REQUESTED
+    PERSONA_FAVOURITED
+    PERSONA_UNFAVOURITED
+    CHAT_MESSAGE_SENT
+    WEBHOOK_FAILED
+    WEBHOOK_SUCCESS
+    CONVERSATION_VISIBILITY_CHANGED
+    CONVERSATION_ARCHIVED
+    CONVERSATION_TITLE_UPDATED
+    MESSAGE_EDITED
+    FILE_UPLOADED
+    REACTION_ADDED
+    SHARED_LINK_CREATED
+    SHARED_LINK_ACCESSED
+}
