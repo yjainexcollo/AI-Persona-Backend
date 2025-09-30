@@ -26,5 +26,5 @@ COPY . .
 # Expose the port the app runs on
 EXPOSE 3000
 
-# Start the application
-CMD ["npm", "run", "start"]
+# Start: run DB migrations first (works on free tier, no pre-deploy needed)
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]
