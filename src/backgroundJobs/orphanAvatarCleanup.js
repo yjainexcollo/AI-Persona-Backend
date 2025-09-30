@@ -1,9 +1,8 @@
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const fs = require("fs").promises;
 const path = require("path");
 const logger = require("../utils/logger");
-
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 /**
  * Clean up orphaned avatar files

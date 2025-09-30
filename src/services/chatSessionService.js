@@ -3,12 +3,11 @@
  * Provides only the essential functions for the three required endpoints
  */
 
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const crypto = require("crypto");
 const ApiError = require("../utils/apiError");
 const logger = require("../utils/logger");
-
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 /**
  * Create a new chat session for a user message

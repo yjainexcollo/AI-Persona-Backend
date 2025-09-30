@@ -4,7 +4,7 @@
  * Includes webhook communication, circuit breaker, and encryption
  */
 
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const axios = require("axios");
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
@@ -13,8 +13,7 @@ const { getCircuitBreaker } = require("../utils/circuitBreaker");
 const authService = require("./authService");
 const chatSessionService = require("./chatSessionService");
 const { generateConversationTitle } = require("./titleService");
-
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 // Webhook timeout and retry configuration
 const WEBHOOK_TIMEOUT = 30000; // 30 seconds

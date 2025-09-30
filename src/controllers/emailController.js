@@ -3,8 +3,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/apiError");
 const apiResponse = require("../utils/apiResponse");
 const logger = require("../utils/logger");
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../utils/prisma");
 
 /**
  * Extract client information from request for audit logging

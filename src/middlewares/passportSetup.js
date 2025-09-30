@@ -1,23 +1,11 @@
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const oauthProviders = require("../utils/oauthProviders");
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
 
-// Use singleton pattern for Prisma client
-let prisma;
-
-/**
- * Get or create Prisma client instance
- * @returns {PrismaClient} Prisma client instance
- */
-function getPrismaClient() {
-  if (!prisma) {
-    prisma = new PrismaClient();
-  }
-  return prisma;
-}
+// getPrismaClient no longer needed; we import singleton directly
 
 /**
  * Validate and extract email from OAuth profile
@@ -89,7 +77,7 @@ function validateProfile(profile) {
  * @returns {Object|null} Workspace object or null
  */
 async function findOrCreateWorkspace(email, client = null) {
-  const prismaClient = client || getPrismaClient();
+  const prismaClient = client || prisma;
 
   try {
     // First, try to find an existing workspace
@@ -127,10 +115,6 @@ async function findOrCreateWorkspace(email, client = null) {
  * @param {PrismaClient} options.prismaClient - Optional Prisma client instance
  */
 function initializePassport(options = {}) {
-  // Allow dependency injection for testing
-  if (options.prismaClient) {
-    prisma = options.prismaClient;
-  }
 
   try {
     // Validate OAuth providers configuration
@@ -158,7 +142,7 @@ function initializePassport(options = {}) {
             scope: ["profile", "email"],
           },
           async (accessToken, refreshToken, profile, done) => {
-            const client = getPrismaClient();
+            const client = prisma;
 
             try {
               logger.info(
@@ -290,7 +274,7 @@ function initializePassport(options = {}) {
 
     // Deserialize user from session
     passport.deserializeUser(async (userId, done) => {
-      const client = getPrismaClient();
+      const client = prisma;
 
       try {
         if (!userId || typeof userId !== "string") {
@@ -341,11 +325,10 @@ function initializePassport(options = {}) {
  * Cleanup Prisma client connection
  */
 async function cleanup() {
-  if (prisma) {
+  try {
     await prisma.$disconnect();
-    prisma = null;
     logger.info("Prisma client disconnected");
-  }
+  } catch (_) {}
 }
 
 module.exports = {
@@ -355,5 +338,4 @@ module.exports = {
   findOrCreateWorkspace,
   cleanup,
   // Export for testing
-  getPrismaClient,
 };

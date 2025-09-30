@@ -1,20 +1,28 @@
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../utils/prisma");
 const { generateToken } = require("../utils/token");
 const nodemailer = require("nodemailer");
 const ApiError = require("../utils/apiError");
 const logger = require("../utils/logger");
 const config = require("../config");
 
-// Configure Nodemailer (replace with your SMTP or provider)
+// Configure Nodemailer with robust settings
+const resolvedPort = Number(config.smtpPort || 587);
+const useSecure = resolvedPort === 465;
 const transporter = nodemailer.createTransport({
   host: config.smtpHost,
-  port: config.smtpPort,
-  secure: false,
+  port: resolvedPort,
+  secure: useSecure, // true for 465, false for 587
+  requireTLS: !useSecure, // enforce STARTTLS on 587
   auth: {
     user: config.smtpUser,
     pass: config.smtpPass,
   },
+  connectionTimeout: 20000,
+  greetingTimeout: 10000,
+  socketTimeout: 30000,
+  pool: true,
+  maxConnections: 2,
+  maxMessages: 20,
 });
 
 // Test email configuration
@@ -73,6 +81,10 @@ async function createEmailVerification(userId, expiresInMinutes = 1440) {
 // Send verification email
 async function sendVerificationEmail(user, token) {
   try {
+    if (String(process.env.SKIP_EMAIL_VERIFICATION).toLowerCase() === "true") {
+      logger.warn("SKIP_EMAIL_VERIFICATION=true: skipping sending verification email");
+      return;
+    }
     // Validate required parameters
     if (!user || !user.email || !token) {
       throw new ApiError(

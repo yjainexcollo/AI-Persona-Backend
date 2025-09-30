@@ -3,7 +3,7 @@
  * Includes account lifecycle, security hardening, and audit logging
  */
 
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 const logger = require("../utils/logger");
@@ -13,7 +13,6 @@ const emailService = require("./emailService");
 const breachCheckService = require("./breachCheckService");
 const jwtUtils = require("../utils/jwt");
 
-const prisma = new PrismaClient();
 
 // Password strength validation using zxcvbn-like logic
 function validatePasswordStrength(password) {

@@ -1,9 +1,9 @@
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
 const { signToken, signRefreshToken } = require("../utils/jwt");
 
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 // Helper function to get or create default workspace
 async function getOrCreateDefaultWorkspace(email) {

@@ -9,8 +9,7 @@
 
 const { verifyToken } = require("../utils/jwt");
 const ApiError = require("../utils/apiError");
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../utils/prisma");
 
 async function authMiddleware(req, res, next) {
   try {

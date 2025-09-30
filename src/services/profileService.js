@@ -1,4 +1,4 @@
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const bcrypt = require("bcrypt");
 const sharp = require("sharp");
 const crypto = require("crypto");
@@ -7,8 +7,6 @@ const fs = require("fs").promises;
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
 const breachCheckService = require("./breachCheckService");
-
-const prisma = new PrismaClient();
 
 // Get user profile
 async function getProfile(userId) {

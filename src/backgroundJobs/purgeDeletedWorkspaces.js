@@ -1,7 +1,6 @@
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const logger = require("../utils/logger");
-
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 /**
  * Purge deleted workspaces that have passed their purge date

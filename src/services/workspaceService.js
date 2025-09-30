@@ -1,8 +1,8 @@
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
 
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 // Get workspace details
 async function getWorkspace(workspaceId, userId) {

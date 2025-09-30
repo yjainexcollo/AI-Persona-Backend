@@ -6,8 +6,7 @@
 const authService = require("../services/authService");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/apiError");
-const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = require("../utils/prisma");
 const emailService = require("../services/emailService");
 const crypto = require("crypto");
 const jwtUtils = require("../utils/jwt");

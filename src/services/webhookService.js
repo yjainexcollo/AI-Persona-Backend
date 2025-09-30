@@ -3,14 +3,13 @@
  * Processes persona traits updates and manages webhook authentication
  */
 
-const { PrismaClient } = require("@prisma/client");
+const prisma = require("../utils/prisma");
 const logger = require("../utils/logger");
 const ApiError = require("../utils/apiError");
 const authService = require("./authService");
 const axios = require("axios");
 const { decrypt } = require("../utils/encrypt");
-
-const prisma = new PrismaClient();
+// prisma singleton imported
 
 // Heuristic check for a metadata-like object
 function looksLikeMetadata(obj) {
