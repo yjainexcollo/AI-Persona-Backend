@@ -26,5 +26,5 @@ COPY . .
 # Expose the port the app runs on
 EXPOSE 3000
 
-# Start: run DB migrations first (works on free tier, no pre-deploy needed)
-CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]
+# Start: run migrations with MIGRATE_DATABASE_URL, then serve with RUNTIME_DATABASE_URL
+CMD ["sh", "-c", "DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && DATABASE_URL=${DATABASE_URL:-$DATABASE_URL} npm run start"]
