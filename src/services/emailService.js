@@ -13,6 +13,7 @@ const transporter = nodemailer.createTransport({
   port: resolvedPort,
   secure: useSecure, // true for 465, false for 587
   requireTLS: !useSecure, // enforce STARTTLS on 587
+  family: 4, // prefer IPv4 to avoid IPv6 egress issues
   auth: {
     user: config.smtpUser,
     pass: config.smtpPass,
@@ -23,6 +24,9 @@ const transporter = nodemailer.createTransport({
   pool: true,
   maxConnections: 2,
   maxMessages: 20,
+  tls: {
+    servername: config.smtpHost,
+  },
 });
 
 // Test email configuration
