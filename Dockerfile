@@ -27,4 +27,4 @@ COPY . .
 EXPOSE 3000
 
 # Start: run migrations with MIGRATE_DATABASE_URL, then serve with RUNTIME_DATABASE_URL
-CMD ["sh", "-c", "DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && DATABASE_URL=${DATABASE_URL:-$DATABASE_URL} npm run start"]
+CMD ["sh", "-c", "DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && DATABASE_URL=${RUNTIME_DATABASE_URL:-$DATABASE_URL} npm run start"]
