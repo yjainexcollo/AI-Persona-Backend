@@ -12,7 +12,7 @@ const {
   validateChatMessage,
   validateFavouriteToggle,
 } = require("../middlewares/validationMiddleware");
-const { chatLimiter, personaLimiter } = require("../middlewares/rateLimiter");
+const { chatLimiter, personaLimiter, serviceAccountLimiter } = require("../middlewares/rateLimiter");
 const logger = require("../utils/logger");
 
 // All routes require authentication
@@ -113,11 +113,30 @@ router.post(
   personaController.toggleFavourite
 );
 
+// Helper to select appropriate rate limiter based on user type
+// Service accounts (name + emailVerified + ADMIN role + email pattern) get higher limits
+const selectChatRateLimiter = (req, res, next) => {
+  const isServiceAccount =
+    req.user &&
+    req.user.role === "ADMIN" &&
+    req.user.emailVerified === true &&
+    req.user.name === "n8n Service Account" &&
+    req.user.email &&
+    req.user.email.includes("service-account");
+
+  if (isServiceAccount) {
+    logger.debug("Using service account rate limiter", { userId: req.user.id });
+    return serviceAccountLimiter(req, res, next);
+  }
+
+  return chatLimiter(req, res, next);
+};
+
 // POST /api/personas/:id/chat - Send message
 router.post(
   "/:id/chat",
   authenticatedOnly,
-  chatLimiter,
+  selectChatRateLimiter,
   (req, res, next) => {
     try {
       const { id } = req.params;

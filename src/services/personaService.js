@@ -13,12 +13,59 @@ const { getCircuitBreaker } = require("../utils/circuitBreaker");
 const authService = require("./authService");
 const chatSessionService = require("./chatSessionService");
 const { generateConversationTitle } = require("./titleService");
+const { validateChatWebhookUrl } = require("../utils/webhookUrlValidators");
 // prisma singleton imported
 
 // Webhook timeout and retry configuration
 const WEBHOOK_TIMEOUT = 30000; // 30 seconds
 const WEBHOOK_RETRIES = 2;
 const WEBHOOK_RETRY_DELAY = 1000; // 1 second base delay
+
+/**
+ * Extract title from n8n response (multiple possible shapes)
+ * @param {object} data - n8n response data
+ * @returns {string|null} Extracted title or null
+ */
+function extractTitleFromN8nResponse(data) {
+  if (!data) return null;
+
+  // Direct properties
+  if (data.suggestedTitle && typeof data.suggestedTitle === 'string') {
+    return data.suggestedTitle.trim();
+  }
+  if (data.title && typeof data.title === 'string') {
+    return data.title.trim();
+  }
+
+  // Nested in data
+  if (data.data?.suggestedTitle && typeof data.data.suggestedTitle === 'string') {
+    return data.data.suggestedTitle.trim();
+  }
+  if (data.data?.title && typeof data.data.title === 'string') {
+    return data.data.title.trim();
+  }
+
+  // Nested in metadata
+  if (data.metadata?.suggestedTitle && typeof data.metadata.suggestedTitle === 'string') {
+    return data.metadata.suggestedTitle.trim();
+  }
+  if (data.metadata?.title && typeof data.metadata.title === 'string') {
+    return data.metadata.title.trim();
+  }
+
+  // Array responses: [{json:{...}}] style (common n8n format)
+  if (Array.isArray(data) && data.length > 0) {
+    const first = data[0];
+    if (first.json?.suggestedTitle && typeof first.json.suggestedTitle === 'string') {
+      return first.json.suggestedTitle.trim();
+    }
+    if (first.json?.title && typeof first.json.title === 'string') {
+      return first.json.title.trim();
+    }
+  }
+
+  return null;
+}
 
 /**
  * Get all personas with optional favourites filter
@@ -244,6 +291,7 @@ async function toggleFavourite(personaId, userId) {
  * @param {string} message - Message content
  * @param {string} conversationId - Conversation ID (optional)
  * @param {string} userId - User ID
+ * @param {string} workspaceId - Workspace ID (for isolation)
  * @param {string} fileId - File ID (optional)
  * @param {object} metadata - Additional metadata for session tracking
  * @returns {Promise<object>}
@@ -253,6 +301,7 @@ async function sendMessage(
   message,
   conversationId,
   userId,
+  workspaceId,
   fileId = null,
   metadata = {}
 ) {
@@ -264,12 +313,16 @@ async function sendMessage(
       throw new ApiError(400, "Valid personaId is required");
     }
 
-    if (!message || typeof message !== "string") {
-      throw new ApiError(400, "Valid message is required");
-    }
-
     if (!userId || typeof userId !== "string") {
       throw new ApiError(400, "Valid userId is required");
+    }
+
+    if (!workspaceId || typeof workspaceId !== "string") {
+      throw new ApiError(400, "Valid workspaceId is required");
+    }
+
+    if (!message || typeof message !== "string" || message.trim() === "") {
+      throw new ApiError(400, "Valid message is required");
     }
 
     // Validate persona exists and is active
@@ -294,17 +347,44 @@ async function sendMessage(
     // Get or create conversation
     let conversation;
     if (conversationId) {
+      // Try to find existing conversation that matches userId, personaId, and workspaceId
       conversation = await prisma.conversation.findFirst({
         where: {
           id: conversationId,
           userId,
-          personaId,
+          personaId, // CRITICAL: must match current persona
           isActive: true,
+          user: {
+            workspaceId,
+          },
         },
       });
 
       if (!conversation) {
-        throw new ApiError(404, "Conversation not found");
+        // Conversation not found or doesn't match current persona
+        // This happens when UI switches personas but reuses old conversationId
+        // Solution: Create new conversation instead of throwing 404
+        logger.warn("Conversation mismatch, creating new conversation", {
+          oldConversationId: conversationId,
+          personaId,
+          userId,
+          workspaceId,
+          reason: "conversation_not_found_or_persona_mismatch",
+        });
+
+        conversation = await prisma.conversation.create({
+          data: {
+            userId,
+            personaId,
+            title: null, // Let AI generate title
+          },
+        });
+
+        logger.info("Created new conversation due to mismatch", {
+          newConversationId: conversation.id,
+          personaId,
+          userId,
+        });
       }
     } else {
       // Create new conversation
@@ -317,6 +397,7 @@ async function sendMessage(
         },
       });
     }
+
 
     // Validate file if provided
     let file = null;
@@ -356,40 +437,191 @@ async function sendMessage(
       },
     });
 
+    // Chat MUST use persona.webhookUrl (which contains chat URLs)
+    // DO NOT use traits registry or any other source
+    if (!persona.webhookUrl) {
+      logger.error("Persona webhook URL not configured", {
+        personaId,
+        personaSlug: persona.slug,
+        personaName: persona.name,
+        userId,
+      });
+
+      // Create audit event for misconfigured persona
+      await authService.createAuditEvent(userId, "WEBHOOK_FAILED", {
+        personaId,
+        personaSlug: persona.slug,
+        personaName: persona.name,
+        reason: "chat_webhook_not_configured",
+        ipAddress: metadata?.ipAddress || null,
+        userAgent: metadata?.userAgent || null,
+      });
+
+      throw new ApiError(
+        422,
+        `Chat webhook not configured for persona "${persona.name}"`
+      );
+    }
+
     // Decrypt webhook URL
-    const webhookUrl = decrypt(persona.webhookUrl, process.env.ENCRYPTION_KEY);
+    let webhookUrl;
+    try {
+      webhookUrl = decrypt(persona.webhookUrl, process.env.ENCRYPTION_KEY);
+    } catch (decryptError) {
+      logger.error("Failed to decrypt persona webhook URL", {
+        personaId,
+        personaSlug: persona.slug,
+        personaName: persona.name,
+        userId,
+        error: decryptError.message,
+      });
+
+      await authService.createAuditEvent(userId, "WEBHOOK_FAILED", {
+        personaId,
+        personaSlug: persona.slug,
+        personaName: persona.name,
+        reason: "webhook_url_decryption_failed",
+        error: decryptError.message,
+        ipAddress: metadata?.ipAddress || null,
+        userAgent: metadata?.userAgent || null,
+      });
+
+      throw new ApiError(
+        500,
+        "Persona webhook configuration error. Please contact support."
+      );
+    }
+
+    // STRICT VALIDATION: Ensure it's a chat URL (not traits)
+    try {
+      validateChatWebhookUrl(webhookUrl, persona.name);
+    } catch (validationError) {
+      logger.error("Chat webhook URL validation failed", {
+        personaId,
+        personaSlug: persona.slug,
+        personaName: persona.name,
+        webhookUrl,
+        error: validationError.message,
+        userId,
+      });
+
+      // Create audit event for validation failure
+      await authService.createAuditEvent(userId, "WEBHOOK_FAILED", {
+        personaId,
+        personaSlug: persona.slug,
+        personaName: persona.name,
+        reason: "chat_webhook_validation_failed",
+        error: validationError.message,
+        ipAddress: metadata?.ipAddress || null,
+        userAgent: metadata?.userAgent || null,
+      });
+
+      throw new ApiError(
+        422,
+        `Chat webhook not configured correctly for persona "${persona.name}": ${validationError.message}`
+      );
+    }
+
+    // Log the webhook URL being called (for debugging)
+    logger.info("Calling chat webhook URL for persona", {
+      personaId,
+      personaSlug: persona.slug,
+      personaName: persona.name,
+      webhookUrl,
+      domain: new URL(webhookUrl).hostname,
+      path: new URL(webhookUrl).pathname,
+      workflowType: "CHAT",
+    });
+
+    // Prepare webhook payload
+    const webhookPayload = {
+      message,
+      conversationId: conversation.id,
+      personaId,
+      userId,
+      sessionId: chatSession.sessionId,
+    };
+
+    // Generate HMAC signature for webhook verification (if secret is configured)
+    let signature = null;
+    if (process.env.WEBHOOK_SECRET) {
+      const crypto = require('crypto');
+      signature = crypto
+        .createHmac('sha256', process.env.WEBHOOK_SECRET)
+        .update(JSON.stringify(webhookPayload))
+        .digest('hex');
+    }
+
 
     // Send to webhook with retries
     let webhookResponse;
     let success = false;
+    let lastError = null; // Capture last error for better error messages
 
     for (let attempt = 1; attempt <= WEBHOOK_RETRIES + 1; attempt++) {
       try {
+        const headers = {
+          "Content-Type": "application/json",
+          "User-Agent": "AI-Persona-Backend/1.0",
+        };
+
+        // Add signature header if available
+        if (signature) {
+          headers["X-Webhook-Signature"] = signature;
+        }
+
         webhookResponse = await axios.post(
           webhookUrl,
-          {
-            message,
-            conversationId: conversation.id,
-            personaId,
-            userId,
-            sessionId: chatSession.sessionId, // Include session ID in webhook payload
-          },
+          webhookPayload,
           {
             timeout: WEBHOOK_TIMEOUT,
-            headers: {
-              "Content-Type": "application/json",
-              "User-Agent": "AI-Persona-Backend/1.0",
-            },
+            headers,
           }
         );
+
+        // Log successful webhook response
+        logger.info('Webhook request successful', {
+          personaId,
+          personaName: persona.name,
+          attempt,
+          status: webhookResponse.status,
+          statusText: webhookResponse.statusText,
+          responseDataKeys: Object.keys(webhookResponse.data || {}),
+          hasReply: !!webhookResponse.data?.reply,
+        });
 
         success = true;
         break;
       } catch (error) {
+        lastError = error; // Capture for error message generation
+
+        // Extract detailed error information from axios error
+        const errorDetails = {
+          message: error.message,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          url: error.config?.url,
+          method: error.config?.method,
+          code: error.code, // ECONNREFUSED, ETIMEDOUT, etc.
+        };
+
         logger.warn(
-          `Webhook attempt ${attempt} failed for persona ${personaId}:`,
-          error.message
+          `Webhook attempt ${attempt} failed for persona ${personaId}`,
+          errorDetails
         );
+
+        // Log detailed error on final attempt
+        if (attempt === WEBHOOK_RETRIES + 1) {
+          logger.error('All webhook attempts exhausted', {
+            personaId,
+            personaName: persona.name,
+            webhookUrl,
+            totalAttempts: WEBHOOK_RETRIES + 1,
+            finalError: errorDetails,
+            stack: error.stack,
+          });
+        }
 
         if (attempt <= WEBHOOK_RETRIES) {
           // Exponential backoff
@@ -403,6 +635,24 @@ async function sendMessage(
       // Record failure in circuit breaker
       circuitBreaker.onFailure();
 
+      // Determine user-friendly error message based on last error
+      let errorMessage = "Failed to get response from persona";
+
+      if (lastError) {
+        const status = lastError.response?.status;
+        const code = lastError.code;
+
+        if (status === 404) {
+          errorMessage = "Persona webhook not found. Please contact support.";
+        } else if (status === 405) {
+          errorMessage = "Persona webhook method not allowed. Please contact support.";
+        } else if (code === 'ETIMEDOUT' || code === 'ECONNABORTED') {
+          errorMessage = "Persona response timeout. Please try again.";
+        } else if (code === 'ECONNREFUSED') {
+          errorMessage = "Persona service unavailable. Please try again later.";
+        }
+      }
+
       // Create audit event
       await authService.createAuditEvent(userId, "WEBHOOK_FAILED", {
         personaId,
@@ -411,7 +661,7 @@ async function sendMessage(
         message,
       });
 
-      throw new ApiError(502, "Failed to get response from persona");
+      throw new ApiError(502, errorMessage);
     }
 
     // Record success in circuit breaker
@@ -439,36 +689,49 @@ async function sendMessage(
       },
     });
 
-    // Extract suggested title from webhook response (if available), otherwise try LLM
-    let suggestedTitle =
-      webhookResponse.data?.suggestedTitle ||
-      webhookResponse.data?.title ||
-      null;
-    if (!suggestedTitle) {
+    // Extract title from n8n response (multiple possible shapes)
+    let extractedTitle = extractTitleFromN8nResponse(webhookResponse.data);
+
+    // If n8n didn't provide a title, try generating one with LLM
+    if (!extractedTitle) {
       try {
-        suggestedTitle = await generateConversationTitle(message, reply);
-      } catch {}
+        extractedTitle = await generateConversationTitle(message, reply);
+      } catch (titleError) {
+        logger.warn("Failed to generate conversation title", {
+          error: titleError.message,
+          conversationId: conversation.id,
+        });
+      }
     }
 
-    // Update conversation title if AI suggested one and there is no custom title yet
+    // Update conversation title if currently null/empty/"Untitled"
     if (
-      suggestedTitle &&
+      extractedTitle &&
       (!conversation.title ||
-        conversation.title === `Chat with ${persona.name}` ||
+        conversation.title.trim() === "" ||
+        conversation.title === "Untitled" ||
         /^Chat with\s/i.test(conversation.title))
     ) {
       try {
-        await updateConversationTitle(conversation.id, suggestedTitle, userId);
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { title: extractedTitle },
+        });
 
         // Update the conversation object for the response
-        conversation.title = suggestedTitle;
+        conversation.title = extractedTitle;
 
-        logger.info(
-          `AI suggested title for conversation ${conversation.id}: "${suggestedTitle}"`
-        );
+        logger.info("Updated conversation title", {
+          conversationId: conversation.id,
+          title: extractedTitle,
+          source: webhookResponse.data?.suggestedTitle ? "n8n" : "llm",
+        });
       } catch (titleError) {
         // Log error but don't fail the message - title update is optional
-        logger.warn("Failed to update conversation title:", titleError.message);
+        logger.warn("Failed to update conversation title", {
+          error: titleError.message,
+          conversationId: conversation.id,
+        });
       }
     }
 
@@ -493,7 +756,7 @@ async function sendMessage(
       assistantMessageId: assistantMessage.id,
       userMessageId: userMessage.id,
       sessionId: chatSession.sessionId,
-      suggestedTitle: suggestedTitle || null, // Include suggested title if available
+      suggestedTitle: extractedTitle || null, // Include suggested title if available
     };
   } catch (error) {
     // Update session status to failed if session was created - REMOVED: updateChatSessionStatus function
@@ -1101,14 +1364,30 @@ async function toggleArchive(conversationId, userId, archived) {
       throw new Error("Invalid input parameters");
     }
 
-    // Find conversation with simple query
+    // Get user's workspace for validation
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { workspaceId: true }
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Find conversation with workspace validation
     const conversation = await prisma.conversation.findFirst({
-      where: { id: conversationId },
+      where: {
+        id: conversationId,
+        userId,
+        user: {
+          workspaceId: user.workspaceId
+        }
+      },
       include: { user: true },
     });
 
     if (!conversation) {
-      throw new Error("Conversation not found");
+      throw new Error("Conversation not found or access denied");
     }
 
     console.log("Found conversation:", {
@@ -1116,11 +1395,6 @@ async function toggleArchive(conversationId, userId, archived) {
       userId: conversation.userId,
       archivedAt: conversation.archivedAt,
     });
-
-    // Check if user owns the conversation
-    if (conversation.userId !== userId) {
-      throw new Error("User not authorized to modify this conversation");
-    }
 
     // Update archive status
     const updatedConversation = await prisma.conversation.update({

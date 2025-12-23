@@ -191,6 +191,7 @@ model AuditEvent {
 model Persona {
     id                  String   @id @default(cuid())
     name                String
+    slug                String   @unique  // URL-friendly unique identifier for stable upserts
     personalName        String?  // The actual name of the persona (e.g., "Sarah Chen", "John Smith")
     personaRole         String?  // The role this persona represents (e.g., "CFO", "Marketing Manager")
     about               String?  // Brief description about the persona
@@ -215,6 +216,7 @@ model Persona {
     @@map("personas")
     @@index([isActive])
     @@index([createdAt])
+    @@index([slug])
 }
 
 // ===================================
@@ -508,6 +510,8 @@ enum AuditEventType {
     CHAT_MESSAGE_SENT
     WEBHOOK_FAILED
     WEBHOOK_SUCCESS
+    WEBHOOK_SIGNATURE_MISSING
+    WEBHOOK_SIGNATURE_INVALID
     CONVERSATION_VISIBILITY_CHANGED
     CONVERSATION_ARCHIVED
     CONVERSATION_TITLE_UPDATED

@@ -76,6 +76,7 @@ async function authMiddleware(req, res, next) {
       name: user.name,
       role: user.role,
       workspaceId: user.workspaceId,
+      emailVerified: user.emailVerified,
     };
 
     next();

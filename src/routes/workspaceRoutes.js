@@ -326,4 +326,78 @@ router.post(
   workspaceController.requestDeletion
 );
 
+/**
+ * POST /api/workspaces/resolve
+ * Resolve workspace by domain (for n8n CRM integration)
+ * Maps external domain (e.g., from CRM lead) to internal workspaceId
+ * Public endpoint - no authentication required for n8n integration
+ */
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient();
+
+router.post("/resolve", async (req, res, next) => {
+  try {
+    const { domain } = req.body;
+    const clientInfo = getClientInfo(req);
+
+    if (!domain) {
+      logger.warn("Workspace resolution failed: missing domain", clientInfo);
+      return res.status(400).json({
+        status: "error",
+        message: "Domain is required"
+      });
+    }
+
+    const workspace = await prisma.workspace.findUnique({
+      where: { domain },
+      select: { id: true, name: true, isActive: true }
+    });
+
+    if (!workspace) {
+      logger.warn("Workspace resolution failed: not found", {
+        domain,
+        ...clientInfo
+      });
+      return res.status(404).json({
+        status: "error",
+        message: "Workspace not found"
+      });
+    }
+
+    if (!workspace.isActive) {
+      logger.warn("Workspace resolution failed: inactive", {
+        domain,
+        workspaceId: workspace.id,
+        ...clientInfo
+      });
+      return res.status(403).json({
+        status: "error",
+        message: "Workspace is inactive"
+      });
+    }
+
+    logger.info("Workspace resolved successfully", {
+      domain,
+      workspaceId: workspace.id,
+      ...clientInfo
+    });
+
+    res.json({
+      status: "success",
+      data: {
+        workspaceId: workspace.id,
+        name: workspace.name
+      }
+    });
+  } catch (error) {
+    const clientInfo = getClientInfo(req);
+    logger.error("Workspace resolution error", {
+      error: error.message,
+      domain: req.body?.domain,
+      ...clientInfo
+    });
+    next(error);
+  }
+});
+
 module.exports = router;

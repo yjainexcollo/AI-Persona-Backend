@@ -3,6 +3,10 @@ const cron = require("node-cron");
 const app = require("./app");
 const config = require("./config");
 const logger = require("./utils/logger");
+const { validateEnvironment } = require("./config/validateEnv");
+
+// Validate environment variables before starting server
+validateEnvironment();
 
 // Import cron jobs
 const purgeDeletedWorkspaces = require("./backgroundJobs/purgeDeletedWorkspaces");

@@ -177,11 +177,44 @@ function initializePassport(options = {}) {
               if (user) {
                 // Check if user is active
                 if (user.status !== "ACTIVE") {
-                  logger.warn(`Inactive user attempted OAuth login: ${email}`);
-                  return done(
-                    new ApiError(403, "User account is not active"),
-                    null
-                  );
+                  const isDevelopment = process.env.NODE_ENV !== "production";
+                  const allowInactiveOAuth = process.env.ALLOW_INACTIVE_OAUTH_LOGIN === "true";
+
+                  // In development or if explicitly allowed, auto-activate the user
+                  if (isDevelopment || allowInactiveOAuth) {
+                    logger.warn(
+                      `Auto-activating inactive user for OAuth login (${process.env.NODE_ENV}): ${email}`
+                    );
+
+                    // Update user status to ACTIVE and mark email as verified
+                    user = await client.user.update({
+                      where: { id: user.id },
+                      data: {
+                        status: "ACTIVE",
+                        emailVerified: true,
+                        verifiedAt: new Date(),
+                      },
+                      include: {
+                        workspace: {
+                          select: { id: true, name: true, status: true },
+                        },
+                      },
+                    });
+
+                    logger.info(
+                      `User ${email} activated successfully via OAuth in development mode`
+                    );
+                  } else {
+                    // Production: block inactive users with clear error
+                    logger.warn(`Inactive user attempted OAuth login: ${email}`);
+                    return done(
+                      new ApiError(
+                        403,
+                        "Your account is inactive. Please contact support or verify your email to activate your account."
+                      ),
+                      null
+                    );
+                  }
                 }
 
                 // Check if workspace is active
@@ -328,7 +361,7 @@ async function cleanup() {
   try {
     await prisma.$disconnect();
     logger.info("Prisma client disconnected");
-  } catch (_) {}
+  } catch (_) { }
 }
 
 module.exports = {

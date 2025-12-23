@@ -5,6 +5,7 @@
 
 const personaService = require("../services/personaService");
 const apiResponse = require("../utils/apiResponse");
+const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const logger = require("../utils/logger");
 
@@ -293,6 +294,7 @@ const sendMessage = asyncHandler(async (req, res) => {
       message.trim(),
       conversationId,
       userId,
+      req.user.workspaceId,
       fileId,
       metadata
     );
@@ -651,9 +653,15 @@ const toggleReaction = asyncHandler(async (req, res) => {
       throw new Error("Invalid message ID");
     }
 
-    // Validate reaction type
-    const validReactionTypes = ["like", "love", "laugh", "wow", "sad", "angry"];
-    if (!validReactionTypes.includes(type.toLowerCase())) {
+    // Validate reaction type (must match Prisma enum: LIKE, DISLIKE)
+    const validReactionTypes = ["like", "dislike"];
+    const reactionTypeMap = {
+      "like": "LIKE",
+      "dislike": "DISLIKE"
+    };
+
+    const normalizedType = type.toLowerCase();
+    if (!validReactionTypes.includes(normalizedType)) {
       logger.warn("Reaction toggle failed: invalid reaction type", {
         userId,
         messageId: id,
@@ -663,17 +671,21 @@ const toggleReaction = asyncHandler(async (req, res) => {
         userAgent,
         traceId,
       });
-      throw new Error(
+      throw new ApiError(
+        400,
         `Invalid reaction type. Must be one of: ${validReactionTypes.join(
           ", "
         )}`
       );
     }
 
+    const mappedType = reactionTypeMap[normalizedType];
+
     logger.info("Message reaction toggle requested", {
       userId,
       messageId: id,
-      type: type.toLowerCase(),
+      type: normalizedType,
+      mappedType,
       ipAddress,
       userAgent,
       traceId,
@@ -682,7 +694,7 @@ const toggleReaction = asyncHandler(async (req, res) => {
     const result = await personaService.toggleReaction(
       id,
       userId,
-      type.toLowerCase()
+      mappedType
     );
 
     logger.info("Message reaction toggled successfully", {
@@ -753,9 +765,8 @@ const toggleArchive = asyncHandler(async (req, res) => {
     res.status(200).json(
       apiResponse({
         data: result,
-        message: `Conversation ${
-          result.archived ? "archived" : "unarchived"
-        } successfully`,
+        message: `Conversation ${result.archived ? "archived" : "unarchived"
+          } successfully`,
       })
     );
 

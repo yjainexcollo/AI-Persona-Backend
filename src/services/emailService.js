@@ -1,46 +1,40 @@
 const prisma = require("../utils/prisma");
 const { generateToken } = require("../utils/token");
-const nodemailer = require("nodemailer");
 const ApiError = require("../utils/apiError");
 const logger = require("../utils/logger");
 const config = require("../config");
+const emailClient = require("./email/emailClient");
 
-// Configure Nodemailer with robust settings
-const resolvedPort = Number(config.smtpPort || 587);
-const useSecure = resolvedPort === 465;
-const transporter = nodemailer.createTransport({
-  host: config.smtpHost,
-  port: resolvedPort,
-  secure: useSecure, // true for 465, false for 587
-  requireTLS: !useSecure, // enforce STARTTLS on 587
-  family: 4, // prefer IPv4 to avoid IPv6 egress issues
-  auth: {
-    user: config.smtpUser,
-    pass: config.smtpPass,
-  },
-  connectionTimeout: 20000,
-  greetingTimeout: 10000,
-  socketTimeout: 30000,
-  pool: true,
-  maxConnections: 2,
-  maxMessages: 20,
-  tls: {
-    servername: config.smtpHost,
-  },
-});
+/**
+ * Convert HTML to plain text (simple implementation)
+ * @param {string} html - HTML content
+ * @returns {string} Plain text
+ */
+function htmlToText(html) {
+  return html
+    .replace(/<[^>]*>/g, '') // Strip HTML tags
+    .replace(/&nbsp;/g, ' ') // Replace &nbsp; with space
+    .replace(/&amp;/g, '&')  // Replace &amp; with &
+    .replace(/&lt;/g, '<')   // Replace &lt; with <
+    .replace(/&gt;/g, '>')   // Replace &gt; with >
+    .replace(/\s+/g, ' ')    // Collapse whitespace
+    .trim();
+}
 
 // Test email configuration
 async function testEmailConfig() {
   try {
-    logger.info(
-      `Testing email configuration: ${config.smtpHost}:${config.smtpPort}`
-    );
-    logger.info(`SMTP User: ${config.smtpUser}`);
-    logger.info(`SMTP From: ${config.smtpFrom}`);
+    logger.info("Testing email configuration...");
 
-    await transporter.verify();
-    logger.info("Email configuration is valid");
-    return true;
+    const result = await emailClient.testConfig();
+
+    if (result) {
+      logger.info("Email configuration is valid");
+      return true;
+    } else {
+      logger.error("Email configuration test failed");
+      return false;
+    }
   } catch (error) {
     logger.error(`Email configuration error: ${error.message}`);
     return false;
@@ -82,13 +76,22 @@ async function createEmailVerification(userId, expiresInMinutes = 1440) {
   }
 }
 
-// Send verification email
+// Send verification email (non-blocking in dev)
 async function sendVerificationEmail(user, token) {
-  try {
-    if (String(process.env.SKIP_EMAIL_VERIFICATION).toLowerCase() === "true") {
-      logger.warn("SKIP_EMAIL_VERIFICATION=true: skipping sending verification email");
-      return;
+  // Check if email verification should be skipped
+  if (String(process.env.SKIP_EMAIL_VERIFICATION).toLowerCase() === "true") {
+    logger.warn("SKIP_EMAIL_VERIFICATION=true: skipping sending verification email");
+
+    // In dev, log the verification link to console
+    if (process.env.NODE_ENV === "development") {
+      const verifyUrl = `${config.appBaseUrl}/api/auth/verify-email?token=${token}`;
+      logger.info(`[DEV] Verification link (not sent via email): ${verifyUrl}`);
     }
+
+    return; // Exit early without throwing
+  }
+
+  try {
     // Validate required parameters
     if (!user || !user.email || !token) {
       throw new ApiError(
@@ -104,28 +107,43 @@ async function sendVerificationEmail(user, token) {
     }
 
     const verifyUrl = `${config.appBaseUrl}/api/auth/verify-email?token=${token}`;
-    const mailOptions = {
-      from: config.smtpFrom,
-      to: user.email,
-      subject: "Verify your email address",
-      html: `<p>Hello ${user.name || ""},</p>
+
+    const html = `<p>Hello ${user.name || ""},</p>
              <p>Please verify your email by clicking the link below:</p>
              <a href="${verifyUrl}">${verifyUrl}</a>
-             <p>This link will expire in 24 hours.</p>`,
-    };
+             <p>This link will expire in 24 hours.</p>`;
+
+    const text = htmlToText(html);
 
     logger.info(`Attempting to send verification email to ${user.email}`);
-    logger.debug(`Email configuration: ${config.smtpHost}:${config.smtpPort}`);
 
-    await transporter.sendMail(mailOptions);
-    logger.info(`Successfully sent verification email to ${user.email}`);
+    const result = await emailClient.sendEmail({
+      toEmail: user.email,
+      toName: user.name,
+      subject: "Verify your email address",
+      html,
+      text,
+    });
+
+    if (result.success) {
+      logger.info(`Successfully sent verification email to ${user.email}`, {
+        messageId: result.messageId,
+      });
+    } else {
+      // Log error but don't throw - allow registration to succeed
+      logger.error(
+        `Failed to send verification email to ${user.email}: ${result.error}`
+      );
+      logger.warn("Email sending failed, but user registration will proceed");
+    }
   } catch (err) {
-    if (err instanceof ApiError) throw err;
+    // Log error but don't throw - allow registration to succeed
     logger.error(
       `Failed to send verification email to ${user.email}: ${err.message}`
     );
-    logger.error(`SMTP Error details: ${JSON.stringify(err)}`);
-    throw new ApiError(500, "Failed to send verification email");
+    logger.warn("Email sending failed, but user registration will proceed");
+
+    // Don't throw - registration should succeed even if email fails
   }
 }
 
@@ -245,18 +263,29 @@ async function sendPasswordResetEmail(user, token) {
     }
 
     const resetUrl = `${config.appBaseUrl}/reset-password?token=${token}`;
-    const mailOptions = {
-      from: config.smtpFrom,
-      to: user.email,
-      subject: "Reset your AI-Persona account password",
-      html: `<p>Hello ${user.name || ""},</p>
+
+    const html = `<p>Hello ${user.name || ""},</p>
              <p>You requested a password reset. Click the link below to set a new password:</p>
              <a href="${resetUrl}">${resetUrl}</a>
-             <p>This link will expire in 1 hour. If you did not request this, you can ignore this email.</p>`,
-    };
+             <p>This link will expire in 1 hour. If you did not request this, you can ignore this email.</p>`;
 
-    await transporter.sendMail(mailOptions);
-    logger.info(`Sent password reset email to ${user.email}`);
+    const text = htmlToText(html);
+
+    const result = await emailClient.sendEmail({
+      toEmail: user.email,
+      toName: user.name,
+      subject: "Reset your AI-Persona account password",
+      html,
+      text,
+    });
+
+    if (result.success) {
+      logger.info(`Sent password reset email to ${user.email}`, {
+        messageId: result.messageId,
+      });
+    } else {
+      throw new ApiError(500, `Failed to send password reset email: ${result.error}`);
+    }
   } catch (err) {
     if (err instanceof ApiError) throw err;
     logger.error(
@@ -286,19 +315,29 @@ async function sendInviteEmail(email, token, workspaceId) {
       "https://ai-persona-frontend-ashy.vercel.app";
     const registerUrl = `${frontendUrl}/register?token=${token}`;
 
-    const mailOptions = {
-      from: config.smtpFrom,
-      to: email,
-      subject: "You're invited to join a workspace on AI-Persona!",
-      html: `<p>Hello,</p>
+    const html = `<p>Hello,</p>
              <p>You have been invited to join a workspace on AI-Persona.</p>
              <p>Click the link below to register and join the workspace:</p>
              <a href="${registerUrl}">${registerUrl}</a>
-             <p>This link will expire in 48 hours. If you did not expect this invite, you can ignore this email.</p>`,
-    };
+             <p>This link will expire in 48 hours. If you did not expect this invite, you can ignore this email.</p>`;
 
-    await transporter.sendMail(mailOptions);
-    logger.info(`Sent workspace invite email to ${email}`);
+    const text = htmlToText(html);
+
+    const result = await emailClient.sendEmail({
+      toEmail: email,
+      toName: null,
+      subject: "You're invited to join a workspace on AI-Persona!",
+      html,
+      text,
+    });
+
+    if (result.success) {
+      logger.info(`Sent workspace invite email to ${email}`, {
+        messageId: result.messageId,
+      });
+    } else {
+      throw new ApiError(500, `Failed to send workspace invite email: ${result.error}`);
+    }
   } catch (err) {
     if (err instanceof ApiError) throw err;
     logger.error(
@@ -318,6 +357,4 @@ module.exports = {
   createPasswordResetToken,
   sendPasswordResetEmail,
   sendInviteEmail,
-  // Test helper to access transporter in unit tests
-  getTransporter: () => transporter,
 };

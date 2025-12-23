@@ -1,7 +1,7 @@
 const dotenv = require("dotenv");
 const path = require("path");
 
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: true });
 
 function getEnvVar(key, required = true) {
   const value = process.env[key];
@@ -23,17 +23,30 @@ const config = {
   microsoftClientId: getEnvVar("MICROSOFT_CLIENT_ID", false),
   microsoftClientSecret: getEnvVar("MICROSOFT_CLIENT_SECRET", false),
   microsoftCallbackUrl: getEnvVar("MICROSOFT_CALLBACK_URL", false),
-  corsOrigin: getEnvVar("CORS_ORIGIN", false) || "*",
+  corsOrigin: getEnvVar("CORS_ORIGIN", false) || "https://ai-persona-frontend-ashy.vercel.app",
   bcryptSaltRounds: parseInt(getEnvVar("BCRYPT_SALT_ROUNDS", false), 10) || 12,
   jwtExpiresIn: getEnvVar("JWT_EXPIRES_IN", false) || "1d",
   jwtRefreshExpiresIn: getEnvVar("JWT_REFRESH_EXPIRES_IN", false) || "7d",
-  smtpHost: getEnvVar("SMTP_HOST", false) || "smtp.example.com",
+
+  // Email Provider Configuration
+  emailProvider: getEnvVar("EMAIL_PROVIDER", false) || null,
+  brevoApiKey: getEnvVar("BREVO_API_KEY", false),
+  emailFrom: getEnvVar("EMAIL_FROM", false),
+  emailFromName: getEnvVar("EMAIL_FROM_NAME", false) || "AI Persona",
+
+  // SMTP Configuration (optional, for backward compatibility)
+  smtpHost: getEnvVar("SMTP_HOST", false),
   smtpPort: parseInt(getEnvVar("SMTP_PORT", false), 10) || 587,
-  smtpUser: getEnvVar("SMTP_USER", false) || "user@example.com",
-  smtpPass: getEnvVar("SMTP_PASS", false) || "password",
-  smtpFrom: getEnvVar("SMTP_FROM", false) || "no-reply@example.com",
+  smtpUser: getEnvVar("SMTP_USER", false),
+  smtpPass: getEnvVar("SMTP_PASS", false),
+  smtpFrom: getEnvVar("SMTP_FROM", false),
+  // Backend URL for generating email links (verify-email, reset-password, etc.)
   appBaseUrl:
     getEnvVar("APP_BASE_URL", false) ||
+    "https://ai-persona-backend-828912814307.asia-southeast1.run.app",
+  // Frontend URL for redirects and emails
+  frontendUrl:
+    getEnvVar("FRONTEND_URL", false) ||
     "https://ai-persona-frontend-ashy.vercel.app",
 };
 

@@ -1,6 +1,6 @@
 /**
  * WebhookRoutes - Webhook endpoints for external integrations
- * Includes authentication, admin role checks, and comprehensive logging
+ * Includes authentication, admin role checks, signature verification, and comprehensive logging
  */
 
 const express = require("express");
@@ -8,7 +8,8 @@ const router = express.Router();
 const webhookController = require("../controllers/webhookController");
 const authMiddleware = require("../middlewares/authMiddleware");
 const roleMiddleware = require("../middlewares/roleMiddleware");
-const { personaLimiter } = require("../middlewares/rateLimiter");
+const { verifyWebhookSignature } = require("../middlewares/webhookSignatureMiddleware");
+const { webhookLimiter } = require("../middlewares/rateLimiter");
 const {
   validateWebhookTraits,
 } = require("../middlewares/validationMiddleware");
@@ -53,10 +54,12 @@ router.get(
 );
 
 // POST /api/webhooks/traits - Process persona traits update webhook
+// Middleware order: rate limit → signature → auth → validation → handler
 router.post(
   "/traits",
-  adminOnly,
-  personaLimiter,
+  webhookLimiter,              // 1. Rate limit first (cheap protection)
+  verifyWebhookSignature,      // 2. Verify signature (block forged traffic)
+  adminOnly,                   // 3. Authenticate and authorize
   (req, res, next) => {
     try {
       const { personaName } = req.body;
@@ -78,15 +81,17 @@ router.post(
       next(error);
     }
   },
-  validateWebhookTraits,
-  webhookController.processTraitsWebhook
+  validateWebhookTraits,       // 4. Validate payload structure
+  webhookController.processTraitsWebhook  // 5. Process request
 );
 
 // POST /api/webhooks/traits/forward - Forward payload to n8n, then update DB from its response
+// Middleware order: rate limit → signature → auth → validation → handler
 router.post(
   "/traits/forward",
-  adminOnly,
-  personaLimiter,
+  webhookLimiter,              // 1. Rate limit first
+  verifyWebhookSignature,      // 2. Verify signature
+  adminOnly,                   // 3. Authenticate and authorize
   (req, res, next) => {
     try {
       const { personaName } = req.body;
@@ -106,8 +111,8 @@ router.post(
       next(error);
     }
   },
-  validateWebhookTraits,
-  webhookController.forwardTraitsToN8n
+  validateWebhookTraits,       // 4. Validate payload structure
+  webhookController.forwardTraitsToN8n  // 5. Process request
 );
 
 module.exports = router;

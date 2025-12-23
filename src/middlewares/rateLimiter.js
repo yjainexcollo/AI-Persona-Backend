@@ -3,39 +3,82 @@ const { ipKeyGenerator } = require("express-rate-limit");
 const Redis = require("ioredis");
 const logger = require("../utils/logger");
 
-// Initialize Redis client with enhanced configuration
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
-  retryDelayOnFailover: 100,
-  maxRetriesPerRequest: 3,
-  lazyConnect: true,
-  connectTimeout: 10000,
-  commandTimeout: 5000,
-  // Reconnection settings
-  retryDelayOnClusterDown: 300,
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false,
-});
+// Only initialize Redis if REDIS_URL is provided
+let redis = null;
+const REDIS_URL = process.env.REDIS_URL;
+const NODE_ENV = process.env.NODE_ENV || "development";
 
-// Redis connection event handling
-redis.on("error", (err) => {
-  logger.warn("Redis rate limiter error:", err.message);
-});
+if (REDIS_URL) {
+  redis = new Redis(REDIS_URL, {
+    // Connection settings
+    lazyConnect: true,
+    connectTimeout: 10000,
+    commandTimeout: 5000,
 
-redis.on("connect", () => {
-  logger.info("Redis connected for rate limiting");
-});
+    // Retry settings - prevent infinite reconnection loops
+    retryStrategy(times) {
+      const maxRetries = NODE_ENV === "development" ? 3 : 10;
 
-redis.on("ready", () => {
-  logger.info("Redis ready for rate limiting operations");
-});
+      if (times > maxRetries) {
+        logger.warn(
+          `Redis connection failed after ${maxRetries} attempts. ` +
+          (NODE_ENV === "development"
+            ? "Falling back to in-memory rate limiting."
+            : "Rate limiting may be degraded.")
+        );
+        return null; // Stop retrying
+      }
 
-redis.on("close", () => {
-  logger.warn("Redis connection closed for rate limiting");
-});
+      // Exponential backoff: 100ms, 200ms, 400ms, 800ms, etc.
+      const delay = Math.min(times * 100, 3000);
+      logger.info(`Redis retry attempt ${times}/${maxRetries} in ${delay}ms`);
+      return delay;
+    },
 
-redis.on("reconnecting", () => {
-  logger.info("Redis reconnecting for rate limiting");
-});
+    // Reconnection settings
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: true,
+    enableOfflineQueue: false, // Don't queue commands when disconnected
+  });
+
+  // Attempt initial connection
+  redis.connect().catch((err) => {
+    logger.warn(
+      `Initial Redis connection failed: ${err.message}. ` +
+      "Will retry with backoff strategy."
+    );
+  });
+} else {
+  logger.warn("REDIS_URL not set, rate limiting will use in-memory store");
+}
+
+// Redis connection event handling (only if Redis is enabled)
+if (redis) {
+  redis.on("error", (err) => {
+    // Fixed: Log error message properly, not as spread object
+    logger.warn(`Redis rate limiter error: ${err.message || err}`);
+  });
+
+  redis.on("connect", () => {
+    logger.info("Redis connected for rate limiting");
+  });
+
+  redis.on("ready", () => {
+    logger.info("Redis ready for rate limiting operations");
+  });
+
+  redis.on("close", () => {
+    logger.warn("Redis connection closed for rate limiting");
+  });
+
+  redis.on("reconnecting", (delay) => {
+    logger.info(`Redis reconnecting for rate limiting (delay: ${delay}ms)`);
+  });
+
+  redis.on("end", () => {
+    logger.warn("Redis connection ended - no more reconnection attempts");
+  });
+}
 
 // Custom sliding window store using Redis
 class SlidingWindowRedisStore {
@@ -48,6 +91,11 @@ class SlidingWindowRedisStore {
     this.prefix = (options && options.prefix) || "rl:";
     this.windowMs = (options && options.windowMs) || 60000;
     this.redis = redis;
+
+    // If Redis is not available, throw error so express-rate-limit falls back to memory store
+    if (!redis) {
+      throw new Error("Redis not configured, falling back to in-memory store");
+    }
 
     // Validate windowMs
     if (typeof this.windowMs !== "number" || this.windowMs <= 0) {
@@ -176,10 +224,10 @@ const resendVerificationLimiter = rateLimit({
         "Too many resend verification requests from this IP, please try again after an hour.",
     },
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:resend:",
     windowMs: 60 * 60 * 1000,
-  }),
+  }) : undefined, // Falls back to in-memory store
   standardHeaders: true,
   legacyHeaders: false,
   // Skip failed requests (don't count errors against limit)
@@ -199,10 +247,10 @@ const chatLimiter = rateLimit({
     // Rate limit per persona + user combination
     return `chat:${req.user.id}:${req.params.id}`;
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:chat:",
     windowMs: 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   // Don't count failed requests
@@ -222,10 +270,10 @@ const personaLimiter = rateLimit({
     // Rate limit per user for authenticated requests, fallback to IP with IPv6 support
     return `persona:${req.user?.id || ipKeyGenerator(req)}`;
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:persona:",
     windowMs: 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   skipFailedRequests: true,
@@ -244,10 +292,10 @@ const publicLimiter = rateLimit({
     // Rate limit per IP for public routes (no user authentication)
     return `public:${ipKeyGenerator(req)}`;
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:public:",
     windowMs: 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   skipFailedRequests: true,
@@ -266,10 +314,10 @@ const devLimiter = rateLimit({
     // Rate limit per user for authenticated requests, fallback to IP
     return `dev:${req.user?.id || ipKeyGenerator(req)}`;
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:dev:",
     windowMs: 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   skipFailedRequests: true,
@@ -461,10 +509,10 @@ const registerLimiter = rateLimit({
       message: "Too many registration attempts, please try again later.",
     },
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:register:",
     windowMs: 60 * 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   skipFailedRequests: true,
@@ -478,10 +526,10 @@ const loginLimiter = rateLimit({
       message: "Too many login attempts, please try again later.",
     },
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:login:",
     windowMs: 15 * 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   skipFailedRequests: true,
@@ -495,13 +543,56 @@ const passwordResetLimiter = rateLimit({
       message: "Too many password reset attempts, please try again later.",
     },
   },
-  store: new SlidingWindowRedisStore({
+  store: redis ? new SlidingWindowRedisStore({
     prefix: "rl:password-reset:",
     windowMs: 60 * 60 * 1000,
-  }),
+  }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
   skipFailedRequests: true,
+});
+
+// Service account rate limiter (5x normal rate for n8n automation)
+const serviceAccountLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 600, // 600 requests per minute (5x chatLimiter)
+  message: {
+    error: {
+      message: "Too many requests from service account, please try again later.",
+    },
+  },
+  keyGenerator: (req) => {
+    return `service:${req.user.id}`;
+  },
+  store: redis ? new SlidingWindowRedisStore({
+    prefix: "rl:service:",
+    windowMs: 60 * 1000,
+  }) : undefined,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipFailedRequests: true,
+});
+
+// Webhook rate limiter (strict limits for security)
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 requests per minute per IP (strict)
+  message: {
+    error: {
+      message: "Too many webhook requests, please try again later.",
+    },
+  },
+  keyGenerator: (req) => {
+    // Rate limit per IP for webhook endpoints
+    return `webhook:${ipKeyGenerator(req)}`;
+  },
+  store: redis ? new SlidingWindowRedisStore({
+    prefix: "rl:webhook:",
+    windowMs: 60 * 1000,
+  }) : undefined,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipFailedRequests: false, // Count all requests including failed ones
 });
 
 /**
@@ -541,6 +632,8 @@ module.exports = {
   personaLimiter,
   publicLimiter,
   devLimiter,
+  serviceAccountLimiter,
+  webhookLimiter,
   // Auth rate limiters
   registerLimiter,
   loginLimiter,

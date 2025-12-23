@@ -165,14 +165,14 @@ async function register(
   // Provide an informational warning when breach check indicates non-safe severity
   const breachWarning =
     breachCheck &&
-    breachCheck.isValid &&
-    breachCheck.severity &&
-    breachCheck.severity !== "safe"
+      breachCheck.isValid &&
+      breachCheck.severity &&
+      breachCheck.severity !== "safe"
       ? {
-          message: breachCheck.reason,
-          severity: breachCheck.severity,
-          count: breachCheck.count,
-        }
+        message: breachCheck.reason,
+        severity: breachCheck.severity,
+        count: breachCheck.count,
+      }
       : null;
 
   // Check if user exists
@@ -203,9 +203,14 @@ async function register(
         include: { workspace: true },
       });
 
-      // Send verification email
+      // Send verification email (non-blocking)
       const token = await emailService.createEmailVerification(user.id);
-      await emailService.sendVerificationEmail(user, token);
+      try {
+        await emailService.sendVerificationEmail(user, token);
+      } catch (emailError) {
+        // Email sending failed, but registration succeeded
+        logger.warn(`Email sending failed for reactivated user ${user.id}: ${emailError.message}`);
+      }
 
       // Audit event
       await createAuditEvent(
@@ -254,9 +259,14 @@ async function register(
     include: { workspace: true },
   });
 
-  // Send verification email
+  // Send verification email (non-blocking)
   const token = await emailService.createEmailVerification(user.id);
-  await emailService.sendVerificationEmail(user, token);
+  try {
+    await emailService.sendVerificationEmail(user, token);
+  } catch (emailError) {
+    // Email sending failed, but registration succeeded
+    logger.warn(`Email sending failed for new user ${user.id}: ${emailError.message}`);
+  }
 
   // Audit event
   await createAuditEvent(

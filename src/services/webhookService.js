@@ -9,6 +9,8 @@ const ApiError = require("../utils/apiError");
 const authService = require("./authService");
 const axios = require("axios");
 const { decrypt } = require("../utils/encrypt");
+const traitsWebhookRegistry = require("../config/traitsWebhookRegistry");
+const { validateTraitsWebhookUrl } = require("../utils/webhookUrlValidators");
 // prisma singleton imported
 
 // Heuristic check for a metadata-like object
@@ -274,34 +276,60 @@ async function forwardTraitsToN8n(payload, userId) {
     throw new ApiError(404, `Persona with name "${personaName}" not found`);
   }
 
-  // Resolve target URL
-  // 1) Persona-specific traits URL mapping (preferred)
-  const traitsUrlByPersona = {
-    "HR Ops / Payroll Manager":
-      "https://n8n-excollo.azurewebsites.net/webhook/traits/hr-payroll",
-    "HRIS Lead and Finance Ops/Controller":
-      "https://n8n-excollo.azurewebsites.net/webhook/traits/hris-payroll",
-  };
+  // Resolve target URL using centralized registry
+  // Resolution order:
+  // 1) Traits webhook registry (by slug or normalized name)
+  // 2) Global N8N_TRAITS_WEBHOOK_URL env var
+  // 3) Persona's encrypted webhookUrl (fallback for backward compatibility)
 
-  let targetUrl =
-    traitsUrlByPersona[personaName] ||
-    process.env.N8N_TRAITS_WEBHOOK_URL ||
-    null;
+  let targetUrl = traitsWebhookRegistry.getTraitsWebhookUrl(
+    persona.slug,
+    persona.name
+  );
+
   if (!targetUrl) {
-    // 3) Fallback to persona's own webhook (typically used for chat); keeps backward compat
-    if (!persona.webhookUrl) {
-      throw new ApiError(400, "No n8n webhook URL configured for this persona");
-    }
-    try {
-      targetUrl = decrypt(persona.webhookUrl, process.env.ENCRYPTION_KEY);
-    } catch (e) {
-      logger.error("Failed to decrypt persona webhookUrl", e);
-      throw new ApiError(500, "Failed to resolve webhook URL");
-    }
+    // Fallback to global env var only
+    // NOTE: We do NOT fallback to persona.webhookUrl because:
+    // - persona.webhookUrl is for CHAT workflows
+    // - Traits workflows are DIFFERENT workflows
+    // - Falling back here would silently route traits → chat workflows
+    // - This causes silent data corruption and debugging nightmares
+    targetUrl = process.env.N8N_TRAITS_WEBHOOK_URL;
+  }
+
+  // Ensure we have a target URL
+  if (!targetUrl) {
+    logger.error("No traits webhook URL configured for persona", {
+      personaId: persona.id,
+      personaSlug: persona.slug,
+      personaName: persona.name,
+    });
+    throw new ApiError(
+      422,
+      `Traits webhook not configured for persona "${personaName}". Please add mapping to traits webhook registry.`
+    );
+  }
+
+  // STRICT VALIDATION: Ensure it's a traits URL (not chat)
+  try {
+    validateTraitsWebhookUrl(targetUrl, persona.name);
+  } catch (validationError) {
+    logger.error("Traits webhook URL validation failed", {
+      personaId: persona.id,
+      personaSlug: persona.slug,
+      personaName: persona.name,
+      targetUrl,
+      error: validationError.message,
+    });
+    throw new ApiError(
+      422,
+      `Traits webhook not configured correctly for persona "${persona.name}": ${validationError.message}`
+    );
   }
 
   logger.info("Forwarding traits payload to n8n", {
     personaId: persona.id,
+    personaSlug: persona.slug,
     personaName,
     targetUrl,
   });

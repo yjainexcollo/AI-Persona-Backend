@@ -1,30 +1,30 @@
-# Use official Node.js LTS image
-FROM node:18-alpine
+# Use Debian-based Node image
+FROM node:20-bullseye-slim
 
-# For sharp and native deps
-RUN apk add --no-cache libc6-compat
+# Install required libs
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /usr/src/app
 
 # Copy package files
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install dependencies (including dev dependencies needed for Prisma)
+# Install dependencies
 RUN npm ci
 
-# Generate Prisma client for the target platform
+# Generate Prisma client
 RUN npx prisma generate
 
-# Remove dev dependencies to reduce image size
+# Prune dev dependencies
 RUN npm prune --omit=dev
 
 # Copy application source
 COPY . .
 
-# Expose the port the app runs on
 EXPOSE 3000
 
-# Start: run migrations with MIGRATE_DATABASE_URL, then serve with RUNTIME_DATABASE_URL
-CMD ["sh", "-c", "DATABASE_URL=${MIGRATE_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && DATABASE_URL=${RUNTIME_DATABASE_URL:-$DATABASE_URL} npm run start"]
+# Start app directly without migrations
+CMD ["npm", "run", "start"]
