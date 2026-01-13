@@ -1,8 +1,13 @@
 /**
- * Seed 8 Production Personas with Encrypted Webhook URLs
+ * Seed 5 Production Personas with Encrypted Webhook URLs
  * 
- * This script creates/updates 8 personas with their corresponding n8n webhook URLs.
+ * This script creates/updates 5 personas with their corresponding n8n webhook URLs.
  * Webhook URLs are encrypted using ENCRYPTION_KEY before storage.
+ * 
+ * Note: The following personas have been deactivated and are not included:
+ * - HRIS Lead and Finance Ops/Controller
+ * - HR Ops / Payroll Manager
+ * - Chief Financial Officer
  * 
  * Usage:
  *   npm run seed:personas
@@ -31,54 +36,26 @@ function validateEncryptionKey() {
     console.log("✅ ENCRYPTION_KEY found");
 }
 
-// Define 8 personas with their n8n webhook URLs and avatar URLs
+// Define 5 personas with their n8n webhook URLs and avatar URLs
+// Removed personas: HRIS Lead, HR Ops/Payroll Manager, CFO (deactivated)
+// Note: All webhook URLs must include /chat/ in the path for validation
 const PERSONAS = [
-    {
-        name: "HRIS Lead and Finance Ops/Controller",
-        slug: "hris-lead-finance-ops-controller",
-        personalName: "Sarah Chen",
-        personaRole: "HRIS Lead and Finance Ops/Controller",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/HRIS-Lead-and-Finance-Ops-Controller",
-        avatarUrl: "/avatars/hris-lead-finance-ops-controller.png",
-        about: "Expert in HRIS systems, financial operations, and controller functions",
-        communicationStyle: "Analytical and detail-oriented",
-    },
-    {
-        name: "Chief Financial Officer",
-        slug: "chief-financial-officer",
-        personalName: "Michael Rodriguez",
-        personaRole: "Chief Financial Officer (CFO)",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/Chief-Financial-Officer",
-        avatarUrl: "/avatars/chief-financial-officer.png",
-        about: "Strategic financial leader focused on growth and fiscal responsibility",
-        communicationStyle: "Strategic and data-driven",
-    },
     {
         name: "Chief Business Officer",
         slug: "chief-business-officer",
         personalName: "Jennifer Park",
         personaRole: "Chief Business Officer (CBO)",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/Chief-Business-Officer",
+        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/chat/Chief-Business-Officer",
         avatarUrl: "/avatars/chief-business-officer.png",
         about: "Business strategy expert driving operational excellence and partnerships",
         communicationStyle: "Strategic and collaborative",
-    },
-    {
-        name: "HR Ops / Payroll Manager",
-        slug: "hr-ops-payroll-manager",
-        personalName: "David Thompson",
-        personaRole: "HR Ops / Payroll Manager",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/HR-Ops-Payroll-Manager",
-        avatarUrl: "/avatars/hr-ops-payroll-manager.png",
-        about: "Specialist in HR operations, payroll processing, and compliance",
-        communicationStyle: "Precise and process-oriented",
     },
     {
         name: "Head of Revenue Operations and Growth Strategy",
         slug: "head-revenue-ops-growth-strategy",
         personalName: "Marcus Foster",
         personaRole: "Head of Revenue Operations and Growth Strategy",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/Head-of-revenue-Operations-and-Growth-Strategy",
+        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/chat/Head-of-revenue-Operations-and-Growth-Strategy",
         avatarUrl: "/avatars/head-revenue-ops-growth-strategy.png",
         about: "Revenue optimization expert focused on scalable growth strategies",
         communicationStyle: "Results-driven and analytical",
@@ -88,7 +65,7 @@ const PERSONAS = [
         slug: "chief-marketing-officer",
         personalName: "Lisa Martinez",
         personaRole: "Chief Marketing Officer (CMO)",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/Chief-Marketing-Officer",
+        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/chat/Chief-Marketing-Officer",
         avatarUrl: "/avatars/chief-marketing-officer.png",
         about: "Marketing leader driving brand strategy and customer acquisition",
         communicationStyle: "Creative and customer-focused",
@@ -98,7 +75,7 @@ const PERSONAS = [
         slug: "chief-executive-officer",
         personalName: "Robert Anderson",
         personaRole: "Chief Executive Officer (CEO)",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/Chief-Executive-Officer",
+        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/chat/Chief-Executive-Officer",
         avatarUrl: "/avatars/chief-executive-officer.png",
         about: "Visionary leader setting company direction and culture",
         communicationStyle: "Visionary and inspiring",
@@ -108,7 +85,7 @@ const PERSONAS = [
         slug: "chief-product-officer",
         personalName: "Emily Zhang",
         personaRole: "Chief Product Officer (CPO)",
-        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/Chief-Product-Officer",
+        webhookUrlRaw: "https://n8n-excollo.azurewebsites.net/webhook/chat/Chief-Product-Officer",
         avatarUrl: "/avatars/chief-product-officer.png",
         about: "Product strategy expert focused on innovation and user experience",
         communicationStyle: "User-centric and innovative",

@@ -15,6 +15,7 @@
     "verify:db": "node scripts/verify-db.js",
     "generate": "npx prisma generate",
     "seed:personas": "node scripts/seed-personas.js",
+    "deactivate:personas": "node scripts/deactivate-personas.js",
     "lint": "echo \"No linter configured yet\" && exit 0",
     "test": "jest",
     "test:watch": "jest --watch",
