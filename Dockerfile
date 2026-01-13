@@ -8,20 +8,18 @@ RUN apt-get update \
 
 WORKDIR /usr/src/app
 
-# Copy package files
+# Copy package files first (for better layer caching)
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install dependencies
-RUN npm ci
+# Install ONLY production dependencies (skip dev deps to speed up build)
+# Use --ignore-scripts to prevent postinstall from running (we'll generate Prisma manually)
+RUN npm ci --only=production --ignore-scripts
 
-# Generate Prisma client
+# Generate Prisma client (only once, not in postinstall)
 RUN npx prisma generate
 
-# Prune dev dependencies
-RUN npm prune --omit=dev
-
-# Copy application source
+# Copy application source (do this after npm install for better caching)
 COPY . .
 
 EXPOSE 3000
